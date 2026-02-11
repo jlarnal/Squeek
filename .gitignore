@@ -5,3 +5,4 @@
 .vscode/ipch
 sdkconfig
 managed_components/
+.CLAUDE.md
