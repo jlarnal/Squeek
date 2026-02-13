@@ -53,6 +53,8 @@ class LedDriver {
      */
     static void rgbBlink(bool enable, bool leaveOn);
 
+
+
     inline static void rgbOff()
     {
         rgbBlink(false, false);

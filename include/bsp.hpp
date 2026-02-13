@@ -28,7 +28,6 @@
 
 // Debug menu
 #define DEBUG_MENU_ENABLED
-#define DEBUG_MENU_TIMEOUT_S 30
 
 // Mesh config
 #define MESH_MAX_NODES       16

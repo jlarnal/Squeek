@@ -3,7 +3,18 @@
     "allow": [
       "WebFetch(domain:developer.espressif.com)",
       "Bash(find:*)",
-      "Bash(C:/Users/arnal/.platformio/penv/Scripts/platformio.exe run:*)"
+      "Bash(C:/Users/arnal/.platformio/penv/Scripts/platformio.exe run:*)",
+      "Bash(C:Espressiftoolspythonv5.5.2venvScriptsesptool.exe --port COM8 flash_id)",
+      "Bash(\"C:\\\\Espressif\\\\tools\\\\python\\\\v5.5.2\\\\venv\\\\Scripts\\\\esptool.exe\" --port COM8 flash_id)",
+      "Bash(\"C:\\\\Espressif\\\\tools\\\\python\\\\v5.5.2\\\\venv\\\\Scripts\\\\python.exe\" -c \"import serial.tools.list_ports; [print\\(p\\) for p in serial.tools.list_ports.comports\\(\\)]\")",
+      "Bash(\"C:\\\\Espressif\\\\tools\\\\python\\\\v5.5.2\\\\venv\\\\Scripts\\\\esptool.exe\" --port COM7 flash_id)",
+      "Bash(set:*)",
+      "Bash(C:/Users/arnal/.platformio/penv/Scripts/platformio.exe device monitor:*)",
+      "Bash(chcp:*)",
+      "Bash(PYTHONIOENCODING=utf-8 C:/Users/arnal/.platformio/penv/Scripts/platformio.exe run:*)",
+      "Bash(PYTHONIOENCODING=utf-8 C:/Users/arnal/.platformio/penv/Scripts/platformio.exe device monitor:*)",
+      "Bash(grep:*)",
+      "Bash(if exist \"G:\\\\sources\\\\Esp32\\\\Squeek\\\\managed_components\\\\chmorgan__esp-libhelix-mp3\\\\libhelix-mp3\\\\real\" rmdir /s /q \"G:\\\\sources\\\\Esp32\\\\Squeek\\\\managed_components\\\\chmorgan__esp-libhelix-mp3\\\\libhelix-mp3\\\\real\")"
     ]
   }
 }

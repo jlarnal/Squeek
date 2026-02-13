@@ -6,3 +6,6 @@
 sdkconfig
 managed_components/
 .CLAUDE.md
+build_log.txt
+monitor_log.txt
+

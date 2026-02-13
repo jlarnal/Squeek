@@ -5,19 +5,34 @@
 
 // --- File-scope state (was private static members) ---
 
-static Adafruit_NeoPixel rgb_led(1, RBG_BUILTIN, NEO_GRB + NEO_KHZ800);
-static TaskHandle_t      blinkTaskHandle = nullptr;
-static volatile bool     rgbBlinkEnabled    = false;
-static uint16_t          rgbPeriod_ms       = 1000;
-static uint16_t          rgbDuty_ptt        = 5000;
-static RgbColor          rgbColor           = { 30, 10, 0 };
+static Adafruit_NeoPixel rgb_led(1, RBG_BUILTIN, NEO_RGB + NEO_KHZ800);
+static TaskHandle_t blinkTaskHandle  = nullptr;
+static volatile bool rgbBlinkEnabled = false;
+static uint16_t rgbPeriod_ms         = 1000;
+static uint16_t rgbDuty_ptt          = 5000;
+static RgbColor rgbColor             = { 30, 10, 0 };
 
-static volatile bool     statusBlinkEnabled = false;
-static uint16_t          statusPeriod_ms    = 1000;
-static uint16_t          statusDuty_ptt     = 5000;
+static volatile bool statusBlinkEnabled = false;
+static uint16_t statusPeriod_ms         = 1000;
+static uint16_t statusDuty_ptt          = 5000;
 
 static void blinkTask(void* pvParameters);
 
+// Resumes or suspends the blink task based on whether blinking is enabled for either LED, and ensures the task is active if needed to update the LEDs to the correct state.
+static void assetLedDriverTaskState()
+{
+    if (blinkTaskHandle == nullptr || eTaskGetState(blinkTaskHandle) == eInvalid)
+        return;
+    if (rgbBlinkEnabled || statusBlinkEnabled) {
+        if (eTaskGetState(blinkTaskHandle) == eSuspended) {
+            vTaskResume(blinkTaskHandle);
+        }
+    } else {
+        if (eTaskGetState(blinkTaskHandle) != eSuspended) {
+            vTaskSuspend(blinkTaskHandle);
+        }
+    }
+}
 // --- Color conversions ---
 
 HsvColor RgbColor::toHsv() const
@@ -113,9 +128,7 @@ void LedDriver::init()
         ESP_LOGW("LedDriver", "Stray blink task found and deleted during init.");
     }
 
-    auto err = xTaskCreateUniversal(
-        blinkTask, "BlinkTask", 2048, nullptr, tskIDLE_PRIORITY + 1,
-        &blinkTaskHandle, tskNO_AFFINITY);
+    auto err = xTaskCreateUniversal(blinkTask, "BlinkTask", 2048, nullptr, tskIDLE_PRIORITY + 1, &blinkTaskHandle, tskNO_AFFINITY);
     if (err != pdPASS) {
         ESP_LOGE("LedDriver", "Failed to create blink task: %d", err);
     }
@@ -124,19 +137,22 @@ void LedDriver::init()
 void LedDriver::statusOn()
 {
     statusBlinkEnabled = false;
+    assetLedDriverTaskState();
     digitalWrite(LED_BUILTIN, HIGH);
 }
 
 void LedDriver::statusOff()
 {
     statusBlinkEnabled = false;
+    assetLedDriverTaskState();
     digitalWrite(LED_BUILTIN, LOW);
 }
 
 void LedDriver::statusFlash(uint16_t onMs, uint16_t offMs, uint8_t count)
 {
-    bool wasEnabled = statusBlinkEnabled;
+    bool wasEnabled    = statusBlinkEnabled;
     statusBlinkEnabled = false;
+    assetLedDriverTaskState();
     for (uint8_t i = 0; i < count; i++) {
         digitalWrite(LED_BUILTIN, HIGH);
         delay(onMs);
@@ -145,6 +161,7 @@ void LedDriver::statusFlash(uint16_t onMs, uint16_t offMs, uint8_t count)
             delay(offMs);
     }
     statusBlinkEnabled = wasEnabled;
+    assetLedDriverTaskState();
 }
 
 void LedDriver::statusBlink(uint16_t period_ms, uint16_t duty_ptt)
@@ -152,6 +169,7 @@ void LedDriver::statusBlink(uint16_t period_ms, uint16_t duty_ptt)
     statusPeriod_ms    = period_ms;
     statusDuty_ptt     = duty_ptt;
     statusBlinkEnabled = true;
+    assetLedDriverTaskState();
 }
 
 void LedDriver::statusBlink(bool enable, bool leaveOn)
@@ -165,6 +183,7 @@ void LedDriver::statusBlink(bool enable, bool leaveOn)
 void LedDriver::rgbSet(RgbColor color)
 {
     rgbBlinkEnabled = false;
+    assetLedDriverTaskState();
     rgbColor = color;
     rgb_led.setPixelColor(0, rgb_led.Color(color.r, color.g, color.b));
     rgb_led.show();
@@ -177,11 +196,13 @@ void LedDriver::rgbBlink(RgbColor color, uint16_t period_ms, int16_t duty_ptt)
     if (duty_ptt >= 0)
         rgbDuty_ptt = static_cast<uint16_t>(duty_ptt);
     rgbBlinkEnabled = true;
+    assetLedDriverTaskState();
 }
 
 void LedDriver::rgbBlink(bool enable, bool leaveOn)
 {
     rgbBlinkEnabled = enable;
+    assetLedDriverTaskState();
     if (!enable && !leaveOn) {
         rgb_led.setPixelColor(0, 0);
         rgb_led.show();
@@ -194,8 +215,8 @@ static void blinkTask(void* pvParameters)
 {
     uint16_t rgbElapsed_ms    = 0;
     uint16_t statusElapsed_ms = 0;
-    bool     rgbIsOn          = false;
-    bool     statusIsOn       = false;
+    bool rgbIsOn              = false;
+    bool statusIsOn           = false;
 
     while (true) {
         bool rgbActive    = rgbBlinkEnabled;
@@ -248,9 +269,7 @@ static void blinkTask(void* pvParameters)
                 rgbIsOn = shouldBeOn;
             }
 
-            uint16_t timeToNext = shouldBeOn
-                ? (rgbOnTime - rgbElapsed_ms)
-                : (rgbPeriod - rgbElapsed_ms);
+            uint16_t timeToNext = shouldBeOn ? (rgbOnTime - rgbElapsed_ms) : (rgbPeriod - rgbElapsed_ms);
             if (timeToNext < sleepMs)
                 sleepMs = timeToNext;
         }
@@ -268,9 +287,7 @@ static void blinkTask(void* pvParameters)
                 statusIsOn = shouldBeOn;
             }
 
-            uint16_t timeToNext = shouldBeOn
-                ? (statusOnTime - statusElapsed_ms)
-                : (statusPeriod - statusElapsed_ms);
+            uint16_t timeToNext = shouldBeOn ? (statusOnTime - statusElapsed_ms) : (statusPeriod - statusElapsed_ms);
             if (timeToNext < sleepMs)
                 sleepMs = timeToNext;
         }

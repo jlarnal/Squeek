@@ -6,6 +6,6 @@
         "nordic-semiconductor.nrf-connect-extension-pack",
         "nordic-semiconductor.nrf-devicetree"
     ],
-    "autoReload": true,
+    "autoReload": false,
     "openInNewWindow": true
 }

@@ -10,28 +10,32 @@
 #include "debug_menu.h"
 #endif
 
-void setup() {
+void setup()
+{
     Serial.begin(115200);
-
-    #ifdef DEBUG_MENU_ENABLED
-    debug_menu();
-    #endif
-
     LedDriver::init();
+    LedDriver::rgbBlink(RgbColor { 20, 8, 0 }, 1000, 1000); // dim slow orange flash
+
+#ifdef DEBUG_MENU_ENABLED
+    debug_menu();
+#endif
+
     power_init();
     rtc_map_init();
     mesh_init();
     mesh_start();
+    LedDriver::rgbSet(0, 20, 0); // dim green = init done.
 }
 
-void loop() {
+void loop()
+{
     // Heartbeat: brief RGB flash to show mesh state
     if (mesh_is_root()) {
-        LedDriver::rgbSet(0, 0, 255);   // blue = gateway
+        LedDriver::rgbSet(0, 0, 255); // blue = gateway
     } else if (mesh_is_connected()) {
-        LedDriver::rgbSet(0, 255, 0);   // green = connected peer
+        LedDriver::rgbSet(0, 255, 0); // green = connected peer
     } else {
-        LedDriver::rgbSet(255, 0, 0);   // red = disconnected
+        LedDriver::rgbSet(255, 0, 0); // red = disconnected
     }
     delay(50);
     LedDriver::rgbOff();

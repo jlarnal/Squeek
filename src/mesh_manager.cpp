@@ -156,6 +156,10 @@ void mesh_init() {
 }
 
 void mesh_start() {
+    // Allow routerless mesh — must be set before esp_mesh_set_config()
+    // so the config validation doesn't reject an empty router SSID.
+    ESP_ERROR_CHECK(esp_mesh_fix_root(true));
+
     mesh_cfg_t cfg = MESH_INIT_CONFIG_DEFAULT();
     cfg.channel = MESH_CHANNEL;
     memcpy((uint8_t*)&cfg.mesh_id, s_mesh_id, 6);
@@ -163,7 +167,7 @@ void mesh_start() {
     // No external router — self-contained mesh
     memset(&cfg.router, 0, sizeof(cfg.router));
 
-    // Mesh AP settings
+    // Mesh AP settings (no password for Phase 1)
     cfg.mesh_ap.max_connection = 6;
     memset(cfg.mesh_ap.password, 0, sizeof(cfg.mesh_ap.password));
 

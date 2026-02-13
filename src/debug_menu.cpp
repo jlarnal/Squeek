@@ -7,23 +7,30 @@
 #include <Arduino.h>
 #include <WiFi.h>
 
-static const char* BANNER = "  Squeek v" SQUEEK_VERSION "  ";
+static const char* BANNER = "  Squeek v" SQUEEK_VERSION "  Press ENTER for debug menu, any other key to skip...  ";
+
+inline static void flushSerialInput()
+{
+    while (Serial.available()) {
+        Serial.read();
+        vTaskDelay(1);
+    }
+}
 
 // Returns true if user pressed ENTER (enter menu), false to skip
-static bool marquee_animation() {
-    const int width = 30;
+static bool marquee_animation()
+{
+    const int width      = 30;
     const int banner_len = strlen(BANNER);
-    unsigned long deadline = millis() + (DEBUG_MENU_TIMEOUT_S * 1000UL);
 
     int dot_pos = 0;
     int dot_dir = 1;
-    int frame = 0;
+    int frame   = 0;
 
-    Serial.println();
-    Serial.println("Press ENTER for debug menu...");
+    flushSerialInput();
     Serial.println();
 
-    while (millis() < deadline) {
+    while (1) {
         // Scrolling banner
         int offset = frame % (banner_len + width);
         Serial.print("\r  ");
@@ -39,22 +46,32 @@ static bool marquee_animation() {
         // Kitt scanner
         Serial.print("  [");
         for (int i = 0; i < 20; i++) {
-            if (i == dot_pos) Serial.print('o');
-            else if (i == dot_pos - 1 || i == dot_pos + 1) Serial.print('.');
-            else Serial.print(' ');
+            if (i == dot_pos)
+                Serial.print('o');
+            else if (i == dot_pos - 1 || i == dot_pos + 1)
+                Serial.print('.');
+            else
+                Serial.print(' ');
         }
         Serial.print(']');
+        Serial.flush();
 
         dot_pos += dot_dir;
-        if (dot_pos >= 19) dot_dir = -1;
-        if (dot_pos <= 0) dot_dir = 1;
+        if (dot_pos >= 19)
+            dot_dir = -1;
+        if (dot_pos <= 0)
+            dot_dir = 1;
         frame++;
 
         if (Serial.available()) {
             char c = Serial.read();
             Serial.println();
-            if (c == '\n' || c == '\r') return true;
+            if (c == '\n' || c == '\r') {
+                flushSerialInput();
+                return true;
+            }
             Serial.println("Skipping to normal boot...");
+            flushSerialInput();
             return false;
         }
 
@@ -65,7 +82,8 @@ static bool marquee_animation() {
     return false;
 }
 
-static void menu_led_test() {
+static void menu_led_test()
+{
     Serial.println("LED test: status LED blink...");
     LedDriver::init();
     LedDriver::statusFlash(200, 200, 3);
@@ -86,18 +104,18 @@ static void menu_led_test() {
     Serial.println("LED test done.");
 }
 
-static void menu_battery() {
+static void menu_battery()
+{
     power_init();
     uint32_t raw = power_battery_raw();
-    uint32_t mv = power_battery_mv();
+    uint32_t mv  = power_battery_mv();
     Serial.printf("Battery RAW: %lu\n", raw);
     Serial.printf("Battery mV:  %lu\n", mv);
-    Serial.printf("Low: %s  Critical: %s\n",
-        power_is_low_battery() ? "YES" : "no",
-        power_is_critical_battery() ? "YES" : "no");
+    Serial.printf("Low: %s  Critical: %s\n", power_is_low_battery() ? "YES" : "no", power_is_critical_battery() ? "YES" : "no");
 }
 
-static void menu_wifi_scan() {
+static void menu_wifi_scan()
+{
     Serial.println("Scanning WiFi...");
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
@@ -109,15 +127,15 @@ static void menu_wifi_scan() {
     } else {
         Serial.printf("Found %d networks:\n", n);
         for (int i = 0; i < n; i++) {
-            Serial.printf("  [%d] %-32s  RSSI:%d  CH:%d\n",
-                i + 1, WiFi.SSID(i).c_str(), WiFi.RSSI(i), WiFi.channel(i));
+            Serial.printf("  [%d] %-32s  RSSI:%d  CH:%d\n", i + 1, WiFi.SSID(i).c_str(), WiFi.RSSI(i), WiFi.channel(i));
         }
     }
     WiFi.scanDelete();
     WiFi.mode(WIFI_OFF);
 }
 
-static void menu_mesh_join() {
+static void menu_mesh_join()
+{
     Serial.println("Initializing mesh...");
     rtc_map_init();
     mesh_init();
@@ -140,7 +158,8 @@ static void menu_mesh_join() {
     rtc_map_print();
 }
 
-static void menu_gateway_elect() {
+static void menu_gateway_elect()
+{
     if (!mesh_is_connected()) {
         Serial.println("Mesh not connected. Run [4] first.");
         return;
@@ -151,18 +170,19 @@ static void menu_gateway_elect() {
     mesh_print_status();
 }
 
-static void menu_rtc_test() {
+static void menu_rtc_test()
+{
     Serial.println("RTC memory test...");
     rtc_map_init();
 
     // Write test pattern
-    rtc_mesh_map_t* map = rtc_map_get();
-    map->own_short_id = 42;
+    rtc_mesh_map_t* map  = rtc_map_get();
+    map->own_short_id    = 42;
     map->mesh_generation = 12345;
-    map->peer_count = 1;
+    map->peer_count      = 1;
     memset(map->peers[0].mac, 0xAA, 6);
     map->peers[0].short_id = 1;
-    map->peers[0].flags = PEER_FLAG_ALIVE;
+    map->peers[0].flags    = PEER_FLAG_ALIVE;
     rtc_map_save();
 
     Serial.println("Written test data:");
@@ -189,15 +209,17 @@ static void menu_rtc_test() {
     rtc_map_print();
 }
 
-static void menu_light_sleep() {
+static void menu_light_sleep()
+{
     Serial.println("Enter sleep seconds (default 5): ");
     unsigned long start = millis();
-    String input = "";
+    String input        = "";
 
     while (millis() - start < 5000) {
         if (Serial.available()) {
             char c = Serial.read();
-            if (c == '\n' || c == '\r') break;
+            if (c == '\n' || c == '\r')
+                break;
             input += c;
         }
     }
@@ -205,7 +227,8 @@ static void menu_light_sleep() {
     uint32_t secs = 5;
     if (input.length() > 0) {
         secs = input.toInt();
-        if (secs == 0) secs = 5;
+        if (secs == 0)
+            secs = 5;
     }
 
     Serial.printf("Sleeping for %lu seconds...\n", secs);
@@ -215,10 +238,12 @@ static void menu_light_sleep() {
     Serial.println("Woke up from light sleep!");
 }
 
-void debug_menu() {
-    delay(500);
+void debug_menu()
+{
 
-    if (!marquee_animation()) return;
+    if (!marquee_animation())
+        return;
+
 
     bool running = true;
     while (running) {
@@ -236,26 +261,42 @@ void debug_menu() {
 
         // Wait for input
         while (!Serial.available()) {
-            delay(10);
+            delay(250);
         }
 
         char choice = Serial.read();
         // Consume trailing newline
-        while (Serial.available()) Serial.read();
+        flushSerialInput();
         Serial.println(choice);
 
         switch (choice) {
-        case '1': menu_led_test(); break;
-        case '2': menu_battery(); break;
-        case '3': menu_wifi_scan(); break;
-        case '4': menu_mesh_join(); break;
-        case '5': menu_gateway_elect(); break;
-        case '6': menu_rtc_test(); break;
-        case '7': menu_light_sleep(); break;
-        case '0': running = false; break;
-        default:
-            Serial.println("Invalid choice.");
-            break;
+            case '1':
+                menu_led_test();
+                break;
+            case '2':
+                menu_battery();
+                break;
+            case '3':
+                menu_wifi_scan();
+                break;
+            case '4':
+                menu_mesh_join();
+                break;
+            case '5':
+                menu_gateway_elect();
+                break;
+            case '6':
+                menu_rtc_test();
+                break;
+            case '7':
+                menu_light_sleep();
+                break;
+            case '0':
+                running = false;
+                break;
+            default:
+                Serial.println("Invalid choice.");
+                break;
         }
     }
 
