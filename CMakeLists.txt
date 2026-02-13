@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.16)
 
-# Exclude managed components we don't use — reduces build time significantly
+# NOTE: EXCLUDE_COMPONENTS has no effect on pioarduino managed components.
+# They are injected by the IDF component manager after this filter runs.
+# Use custom_component_remove in platformio.ini instead.
+# Kept here for pure ESP-IDF builds.
 set(EXCLUDE_COMPONENTS
     # Zigbee stack
     espressif__esp-zigbee-lib

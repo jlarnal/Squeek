@@ -17,7 +17,7 @@ void setup() {
     debug_menu();
     #endif
 
-    led_init();
+    LedDriver::init();
     power_init();
     rtc_map_init();
     mesh_init();
@@ -27,12 +27,14 @@ void setup() {
 void loop() {
     // Heartbeat: brief RGB flash to show mesh state
     if (mesh_is_root()) {
-        led_rgb_flash(0, 0, 255, 50);   // blue = gateway
+        LedDriver::rgbSet(0, 0, 255);   // blue = gateway
     } else if (mesh_is_connected()) {
-        led_rgb_flash(0, 255, 0, 50);   // green = connected peer
+        LedDriver::rgbSet(0, 255, 0);   // green = connected peer
     } else {
-        led_rgb_flash(255, 0, 0, 50);   // red = disconnected
+        LedDriver::rgbSet(255, 0, 0);   // red = disconnected
     }
+    delay(50);
+    LedDriver::rgbOff();
 
     Serial.printf("Battery: %lu mV\n", power_battery_mv());
 

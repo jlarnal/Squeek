@@ -36,5 +36,4 @@ CONFIG_ESP_RMAKER_NETWORK_OVER_WIFI=n
 # LittleFS SDMMC — no SD card
 CONFIG_LITTLEFS_SDMMC_SUPPORT=n
 
-# Certificate bundle — saves ~60KB flash (we don't do TLS)
-CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=n
+

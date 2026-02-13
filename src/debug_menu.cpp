@@ -67,20 +67,22 @@ static bool marquee_animation() {
 
 static void menu_led_test() {
     Serial.println("LED test: status LED blink...");
-    led_init();
-    led_status_blink(200, 200, 3);
+    LedDriver::init();
+    LedDriver::statusFlash(200, 200, 3);
 
     Serial.println("RGB: Red...");
-    led_rgb_flash(255, 0, 0, 500);
-    delay(200);
+    LedDriver::rgbSet(255, 0, 0);
+    delay(500);
 
     Serial.println("RGB: Green...");
-    led_rgb_flash(0, 255, 0, 500);
-    delay(200);
+    LedDriver::rgbSet(0, 255, 0);
+    delay(500);
 
     Serial.println("RGB: Blue...");
-    led_rgb_flash(0, 0, 255, 500);
+    LedDriver::rgbSet(0, 0, 255);
+    delay(500);
 
+    LedDriver::rgbOff();
     Serial.println("LED test done.");
 }
 
