@@ -54,26 +54,33 @@ void NvsConfigManager::begin() {
     }
     NvsConfig::isOpen = true;
 
-    reloadFromNvs();
+    // Check stored settings hash against compile-time hash
+    uint64_t storedHash = nvsGetU64(NVS_KEY_SHASH, 0);
+    if (storedHash != SETTINGS_HASH) {
+        ESP_LOGW(TAG, "Defaults changed (stored=%llX, compiled=%llX) — restoring factory defaults",
+                 storedHash, SETTINGS_HASH);
+        restoreFactoryDefault(0xBEEFF00D);
+    } else {
+        reloadFromNvs();
+    }
 }
 
 void NvsConfigManager::reloadFromNvs() {
     if (!NvsConfig::isOpen) return;
 
-    uint64_t storedHash = nvsGetU64(NVS_KEY_SHASH, 0);
-
-    if (storedHash != SETTINGS_HASH) {
-        ESP_LOGW(TAG, "Defaults changed (stored=%llX, compiled=%llX) — resetting to defaults",
-                 storedHash, SETTINGS_HASH);
-        // Defaults changed in firmware: write fresh defaults to NVS
-        settingHash = SETTINGS_HASH;
-        ledsEnabled = DEFAULT_LEDS_ENABLED;
-        return;
-    }
-
-    // Stored hash matches — load persisted values
-    settingHash.loadInitial(storedHash);
+    settingHash.loadInitial(nvsGetU64(NVS_KEY_SHASH, SETTINGS_HASH));
     ledsEnabled.loadInitial(nvsGetBool(NVS_KEY_LEDSEN, DEFAULT_LEDS_ENABLED));
 
     ESP_LOGI(TAG, "Config loaded from NVS");
+}
+
+bool NvsConfigManager::restoreFactoryDefault(uint32_t safeKey) {
+    if (safeKey != 0xBEEFF00D) return false;
+
+    ESP_LOGW(TAG, "Restoring all settings to factory defaults");
+
+    settingHash  = SETTINGS_HASH;
+    ledsEnabled  = DEFAULT_LEDS_ENABLED;
+
+    return true;
 }

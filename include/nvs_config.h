@@ -34,14 +34,19 @@ inline constexpr uint64_t SETTINGS_HASH =
 
 class NvsConfigManager {
     NvsConfigManager() = delete;
+private:
+    /// FNV-1a hash of all members' compile-time defaults.
+    /// Detects when firmware defaults have changed since last NVS write.
+    static PropertyValue<NVS_KEY_SHASH, uint64_t, NvsConfigManager> settingHash;
 
 public:
     static void begin();
     static void reloadFromNvs();
 
-    /// FNV-1a hash of all members' compile-time defaults.
-    /// Detects when firmware defaults have changed since last NVS write.
-    static PropertyValue<NVS_KEY_SHASH, uint64_t, NvsConfigManager> settingHash;
+    /// Resets ALL NVS-backed members to their compile-time defaults.
+    /// @param safeKey must equal 0xBEEFF00D or the call aborts immediately.
+    /// @return true if reset was performed, false if safeKey was wrong.
+    static bool restoreFactoryDefault(uint32_t safeKey);
 
     /// Whether LEDs (status + RGB) are enabled.
     static PropertyValue<NVS_KEY_LEDSEN, bool, NvsConfigManager>    ledsEnabled;

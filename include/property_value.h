@@ -30,19 +30,36 @@ template <const char* nvsKey, typename T, typename Owner>
 class PropertyValue {
     friend Owner;
 
+public:
+    /// Callback fired before a value change is applied.
+    /// @param oldValue  current stored value
+    /// @param newValue  proposed new value
+    /// @param override  points to a T initialised to newValue; modify to substitute
+    /// @param cancel    points to a bool initialised to false; set true to abort
+    using BeforeChangeFn = void(*)(T oldValue, T newValue, T* override, bool* cancel);
+
 private:
     T _value;
+    BeforeChangeFn _beforeChange = nullptr;
 
-    // Direct load from NVS at startup (bypasses write-back)
+    // Direct load from NVS at startup (bypasses write-back and callback)
     void loadInitial(const T& value) { _value = value; }
 
 public:
     PropertyValue(T init) : _value(init) {}
 
+    void setBeforeChange(BeforeChangeFn cb) { _beforeChange = cb; }
+
     PropertyValue& operator=(const T& newValue) {
-        _value = newValue;
+        T actualValue = newValue;
+        if (_beforeChange) {
+            bool cancel = false;
+            _beforeChange(_value, newValue, &actualValue, &cancel);
+            if (cancel) return *this;
+        }
+        _value = actualValue;
         if (NvsConfig::isOpen) {
-            esp_err_t err = NvsConfig::nvsWrite(nvsKey, newValue);
+            esp_err_t err = NvsConfig::nvsWrite(nvsKey, actualValue);
             if (err == ESP_OK)
                 nvs_commit(NvsConfig::handle);
             else

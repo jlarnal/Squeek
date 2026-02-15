@@ -5,6 +5,7 @@
 
 // --- File-scope state (was private static members) ---
 
+static bool s_ledsEnabled              = true;
 static Adafruit_NeoPixel rgb_led(1, RBG_BUILTIN, NEO_GRB + NEO_KHZ800);
 static TaskHandle_t blinkTaskHandle  = nullptr;
 static volatile bool rgbBlinkEnabled = false;
@@ -134,8 +135,23 @@ void LedDriver::init()
     }
 }
 
+void LedDriver::setEnabled(bool enabled)
+{
+    s_ledsEnabled = enabled;
+    if (!enabled) {
+        // Kill hardware immediately; blink config is intentionally preserved
+        digitalWrite(LED_BUILTIN, LOW);
+        rgb_led.setPixelColor(0, 0);
+        rgb_led.show();
+    }
+    // Ensure blink task is running/suspended to match current blink flags,
+    // so re-enabling with active blink config resumes immediately.
+    assetLedDriverTaskState();
+}
+
 void LedDriver::statusOn()
 {
+    if (!s_ledsEnabled) return;
     statusBlinkEnabled = false;
     assetLedDriverTaskState();
     digitalWrite(LED_BUILTIN, HIGH);
@@ -150,6 +166,7 @@ void LedDriver::statusOff()
 
 void LedDriver::statusFlash(uint16_t onMs, uint16_t offMs, uint8_t count)
 {
+    if (!s_ledsEnabled) return;
     bool wasEnabled    = statusBlinkEnabled;
     statusBlinkEnabled = false;
     assetLedDriverTaskState();
@@ -185,6 +202,7 @@ void LedDriver::rgbSet(RgbColor color)
     rgbBlinkEnabled = false;
     assetLedDriverTaskState();
     rgbColor = color;
+    if (!s_ledsEnabled) return;
     rgb_led.setPixelColor(0, rgb_led.Color(color.r, color.g, color.b));
     rgb_led.show();
 }
@@ -219,6 +237,21 @@ static void blinkTask(void* pvParameters)
     bool statusIsOn           = false;
 
     while (true) {
+        // Master kill-switch: force off and idle while disabled
+        if (!s_ledsEnabled) {
+            if (rgbIsOn) {
+                rgb_led.setPixelColor(0, 0);
+                rgb_led.show();
+                rgbIsOn = false;
+            }
+            if (statusIsOn) {
+                digitalWrite(LED_BUILTIN, LOW);
+                statusIsOn = false;
+            }
+            vTaskDelay(pdMS_TO_TICKS(50));
+            continue;
+        }
+
         bool rgbActive    = rgbBlinkEnabled;
         bool statusActive = statusBlinkEnabled;
 

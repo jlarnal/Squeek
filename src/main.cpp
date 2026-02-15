@@ -1,10 +1,12 @@
 #include <Arduino.h>
 #include "sdkconfig.h"
 #include "bsp.hpp"
+#include "nvs_config.h"
 #include "led_driver.h"
 #include "power_manager.h"
 #include "mesh_conductor.h"
 #include "rtc_mesh_map.h"
+
 
 #ifdef DEBUG_MENU_ENABLED
 #include "debug_menu.h"
@@ -13,7 +15,12 @@
 void setup()
 {
     Serial.begin(115200);
+    NvsConfigManager::begin();
+
     LedDriver::init();
+    NvsConfigManager::ledsEnabled.setBeforeChange(
+        [](bool, bool newVal, bool*, bool*) { LedDriver::setEnabled(newVal); });
+    LedDriver::setEnabled(NvsConfigManager::ledsEnabled);
     LedDriver::rgbBlink(RgbColor { 20, 8, 0 }, 1000, 1000); // dim slow orange flash
 
 #ifdef DEBUG_MENU_ENABLED

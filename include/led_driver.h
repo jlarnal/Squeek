@@ -24,6 +24,10 @@ struct __attribute__((packed)) HsvColor {
 class LedDriver {
   public:
     static void init();
+    /// Master enable/disable. When disabled, all "turn on" calls are silently
+    /// ignored and both LEDs are forced off.  Blink config is preserved so
+    /// blinking resumes automatically when re-enabled.
+    static void setEnabled(bool enabled);
     static void statusOn();
     static void statusOff();
     /// Blocking flash for debug/testing use
