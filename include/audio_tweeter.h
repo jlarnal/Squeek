@@ -1,0 +1,4 @@
+#ifndef AUDIO_TWEETER_H
+#define AUDIO_TWEETER_H
+
+#endif // AUDIO_TWEETER_H

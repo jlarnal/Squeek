@@ -32,11 +32,17 @@ struct rtc_mesh_map_t {
     uint32_t checksum;
 };
 
-void            rtc_map_init();
-bool            rtc_map_is_valid();
-void            rtc_map_save();
-void            rtc_map_clear();
-rtc_mesh_map_t* rtc_map_get();
-void            rtc_map_print();
+class RtcMap {
+public:
+    static void            init();
+    static bool            isValid();
+    static void            save();
+    static void            clear();
+    static rtc_mesh_map_t* get();
+    static void            print();
+
+private:
+    RtcMap() = delete;
+};
 
 #endif // RTC_MESH_MAP_H

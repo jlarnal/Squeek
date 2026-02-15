@@ -5,12 +5,12 @@
 
 // --- File-scope state (was private static members) ---
 
-static Adafruit_NeoPixel rgb_led(1, RBG_BUILTIN, NEO_RGB + NEO_KHZ800);
+static Adafruit_NeoPixel rgb_led(1, RBG_BUILTIN, NEO_GRB + NEO_KHZ800);
 static TaskHandle_t blinkTaskHandle  = nullptr;
 static volatile bool rgbBlinkEnabled = false;
 static uint16_t rgbPeriod_ms         = 1000;
 static uint16_t rgbDuty_ptt          = 5000;
-static RgbColor rgbColor             = { 30, 10, 0 };
+static RgbColor rgbColor             = { 20, 8, 0 };
 
 static volatile bool statusBlinkEnabled = false;
 static uint16_t statusPeriod_ms         = 1000;

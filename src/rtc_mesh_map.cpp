@@ -17,36 +17,36 @@ static uint32_t compute_checksum() {
     return sum;
 }
 
-void rtc_map_init() {
-    if (!rtc_map_is_valid()) {
-        rtc_map_clear();
+void RtcMap::init() {
+    if (!isValid()) {
+        clear();
         esp_read_mac(mesh_map.own_mac, ESP_MAC_WIFI_STA);
         mesh_map.magic = RTC_MAP_MAGIC;
         mesh_map.mesh_channel = MESH_CHANNEL;
-        rtc_map_save();
+        save();
     }
 }
 
-bool rtc_map_is_valid() {
+bool RtcMap::isValid() {
     if (mesh_map.magic != RTC_MAP_MAGIC) return false;
     return mesh_map.checksum == compute_checksum();
 }
 
-void rtc_map_save() {
+void RtcMap::save() {
     mesh_map.checksum = compute_checksum();
 }
 
-void rtc_map_clear() {
+void RtcMap::clear() {
     memset(&mesh_map, 0, sizeof(mesh_map));
 }
 
-rtc_mesh_map_t* rtc_map_get() {
+rtc_mesh_map_t* RtcMap::get() {
     return &mesh_map;
 }
 
-void rtc_map_print() {
+void RtcMap::print() {
     Serial.println("=== RTC Mesh Map ===");
-    Serial.printf("Valid: %s\n", rtc_map_is_valid() ? "yes" : "no");
+    Serial.printf("Valid: %s\n", isValid() ? "yes" : "no");
     Serial.printf("Own MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
         mesh_map.own_mac[0], mesh_map.own_mac[1], mesh_map.own_mac[2],
         mesh_map.own_mac[3], mesh_map.own_mac[4], mesh_map.own_mac[5]);

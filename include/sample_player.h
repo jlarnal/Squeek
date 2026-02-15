@@ -1,0 +1,4 @@
+#ifndef SAMPLE_PLAYER_H
+#define SAMPLE_PLAYER_H
+
+#endif // SAMPLE_PLAYER_H

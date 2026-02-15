@@ -11,7 +11,7 @@ static adc_oneshot_unit_handle_t adc_handle = NULL;
 static adc_cali_handle_t cali_handle = NULL;
 static bool cali_available = false;
 
-void power_init() {
+void PowerManager::init() {
     // Configure ADC oneshot unit
     adc_oneshot_unit_init_cfg_t unit_cfg = {};
     unit_cfg.unit_id = ADC_UNIT_1;
@@ -34,13 +34,13 @@ void power_init() {
     }
 }
 
-uint32_t power_battery_raw() {
+uint32_t PowerManager::batteryRaw() {
     int raw = 0;
     adc_oneshot_read(adc_handle, BATTERY_ADC_CHANNEL, &raw);
     return (uint32_t)raw;
 }
 
-uint32_t power_battery_mv() {
+uint32_t PowerManager::batteryMv() {
     int raw = 0;
     adc_oneshot_read(adc_handle, BATTERY_ADC_CHANNEL, &raw);
 
@@ -55,20 +55,18 @@ uint32_t power_battery_mv() {
     return (uint32_t)(adc_mv * VDIV_RATIO);
 }
 
-bool power_is_low_battery() {
-    return power_battery_mv() < BATTERY_LOW_MV;
+bool PowerManager::isLowBattery() {
+    return batteryMv() < BATTERY_LOW_MV;
 }
 
-bool power_is_critical_battery() {
-    return power_battery_mv() < BATTERY_CRITICAL_MV;
+bool PowerManager::isCriticalBattery() {
+    return batteryMv() < BATTERY_CRITICAL_MV;
 }
 
-void power_enter_light_sleep(uint32_t seconds) {
-    esp_sleep_enable_timer_wakeup((uint64_t)seconds * 1000000ULL);
-    esp_light_sleep_start();
+void PowerManager::lightSleep(uint32_t seconds) {
+    SQ_LIGHT_SLEEP(seconds * 1000UL);
 }
 
-void power_enter_deep_sleep(uint32_t seconds) {
-    esp_sleep_enable_timer_wakeup((uint64_t)seconds * 1000000ULL);
-    esp_deep_sleep_start();
+void PowerManager::deepSleep(uint32_t seconds) {
+    SQ_DEEP_SLEEP(seconds * 1000UL);
 }

@@ -3,7 +3,7 @@
 #include "bsp.hpp"
 #include "led_driver.h"
 #include "power_manager.h"
-#include "mesh_manager.h"
+#include "mesh_conductor.h"
 #include "rtc_mesh_map.h"
 
 #ifdef DEBUG_MENU_ENABLED
@@ -20,19 +20,19 @@ void setup()
     debug_menu();
 #endif
 
-    power_init();
-    rtc_map_init();
-    mesh_init();
-    mesh_start();
+    PowerManager::init();
+    RtcMap::init();
+    MeshConductor::init();
+    MeshConductor::start();
     LedDriver::rgbSet(0, 20, 0); // dim green = init done.
 }
 
 void loop()
 {
     // Heartbeat: brief RGB flash to show mesh state
-    if (mesh_is_root()) {
+    if (MeshConductor::isGateway()) {
         LedDriver::rgbSet(0, 0, 255); // blue = gateway
-    } else if (mesh_is_connected()) {
+    } else if (MeshConductor::isConnected()) {
         LedDriver::rgbSet(0, 255, 0); // green = connected peer
     } else {
         LedDriver::rgbSet(255, 0, 0); // red = disconnected
@@ -40,10 +40,9 @@ void loop()
     delay(50);
     LedDriver::rgbOff();
 
-    Serial.printf("Battery: %lu mV\n", power_battery_mv());
+    Serial.printf("Battery: %lu mV\n", PowerManager::batteryMv());
 
-    rtc_map_save();
+    RtcMap::save();
 
-    // Light sleep between heartbeats
-    power_enter_light_sleep(5);
+    SQ_POWER_DELAY(5000);
 }

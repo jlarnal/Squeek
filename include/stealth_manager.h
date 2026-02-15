@@ -1,0 +1,4 @@
+#ifndef STEALTH_MANAGER_H
+#define STEALTH_MANAGER_H
+
+#endif // STEALTH_MANAGER_H

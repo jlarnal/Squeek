@@ -1,0 +1,4 @@
+#ifndef STORAGE_MANAGER_H
+#define STORAGE_MANAGER_H
+
+#endif // STORAGE_MANAGER_H

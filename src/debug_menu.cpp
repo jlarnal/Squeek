@@ -2,7 +2,7 @@
 #include "bsp.hpp"
 #include "led_driver.h"
 #include "power_manager.h"
-#include "mesh_manager.h"
+#include "mesh_conductor.h"
 #include "rtc_mesh_map.h"
 #include <Arduino.h>
 #include <WiFi.h>
@@ -106,12 +106,12 @@ static void menu_led_test()
 
 static void menu_battery()
 {
-    power_init();
-    uint32_t raw = power_battery_raw();
-    uint32_t mv  = power_battery_mv();
+    PowerManager::init();
+    uint32_t raw = PowerManager::batteryRaw();
+    uint32_t mv  = PowerManager::batteryMv();
     Serial.printf("Battery RAW: %lu\n", raw);
     Serial.printf("Battery mV:  %lu\n", mv);
-    Serial.printf("Low: %s  Critical: %s\n", power_is_low_battery() ? "YES" : "no", power_is_critical_battery() ? "YES" : "no");
+    Serial.printf("Low: %s  Critical: %s\n", PowerManager::isLowBattery() ? "YES" : "no", PowerManager::isCriticalBattery() ? "YES" : "no");
 }
 
 static void menu_wifi_scan()
@@ -137,76 +137,73 @@ static void menu_wifi_scan()
 static void menu_mesh_join()
 {
     Serial.println("Initializing mesh...");
-    rtc_map_init();
-    mesh_init();
-    mesh_start();
+    RtcMap::init();
+    MeshConductor::init();
+    MeshConductor::start();
 
     Serial.println("Waiting for mesh (30s timeout)...");
     unsigned long deadline = millis() + 30000;
-    while (!mesh_is_connected() && millis() < deadline) {
+    while (!MeshConductor::isConnected() && millis() < deadline) {
         delay(500);
         Serial.print(".");
     }
     Serial.println();
 
-    if (mesh_is_connected()) {
+    if (MeshConductor::isConnected()) {
         Serial.println("Mesh connected!");
     } else {
         Serial.println("Mesh timeout — may still be forming.");
     }
-    mesh_print_status();
-    rtc_map_print();
+    MeshConductor::printStatus();
+    RtcMap::print();
 }
 
 static void menu_gateway_elect()
 {
-    if (!mesh_is_connected()) {
+    if (!MeshConductor::isConnected()) {
         Serial.println("Mesh not connected. Run [4] first.");
         return;
     }
-    mesh_force_reelection();
-    Serial.println("Waiting for re-election (15s)...");
-    delay(15000);
-    mesh_print_status();
+    MeshConductor::forceReelection();
 }
 
 static void menu_rtc_test()
 {
     Serial.println("RTC memory test...");
-    rtc_map_init();
+    RtcMap::init();
 
     // Write test pattern
-    rtc_mesh_map_t* map  = rtc_map_get();
+    rtc_mesh_map_t* map  = RtcMap::get();
     map->own_short_id    = 42;
     map->mesh_generation = 12345;
     map->peer_count      = 1;
     memset(map->peers[0].mac, 0xAA, 6);
     map->peers[0].short_id = 1;
     map->peers[0].flags    = PEER_FLAG_ALIVE;
-    rtc_map_save();
+    RtcMap::save();
 
     Serial.println("Written test data:");
-    rtc_map_print();
+    RtcMap::print();
 
     // Validate
-    if (rtc_map_is_valid()) {
+    if (RtcMap::isValid()) {
         Serial.println("PASS: checksum valid after save.");
     } else {
         Serial.println("FAIL: checksum invalid!");
     }
 
     // Clear and verify
-    rtc_map_clear();
-    if (!rtc_map_is_valid()) {
+    RtcMap::clear();
+    if (!RtcMap::isValid()) {
         Serial.println("PASS: map invalid after clear.");
     } else {
         Serial.println("FAIL: map still valid after clear!");
     }
 
     // Re-init
-    rtc_map_init();
+    RtcMap::init();
     Serial.println("Re-initialized:");
-    rtc_map_print();
+    RtcMap::print();
 }
 
 static void menu_light_sleep()
@@ -233,8 +230,8 @@ static void menu_light_sleep()
 
     Serial.printf("Sleeping for %lu seconds...\n", secs);
     Serial.flush();
-    power_init();
-    power_enter_light_sleep(secs);
+    PowerManager::init();
+    PowerManager::lightSleep(secs);
     Serial.println("Woke up from light sleep!");
 }
 
