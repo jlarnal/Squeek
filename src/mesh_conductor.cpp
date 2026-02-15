@@ -2,6 +2,7 @@
 #include "bsp.hpp"
 #include "rtc_mesh_map.h"
 #include "power_manager.h"
+#include "nvs_config.h"
 #include <Arduino.h>
 #include <string.h>
 #include <esp_wifi.h>
@@ -84,7 +85,7 @@ static void updateRtcMap() {
 
 // --- Election logic ---
 
-uint32_t MeshConductor::computeScore() {
+double MeshConductor::computeScore() {
     uint16_t battery = (uint16_t)PowerManager::batteryMv();
     uint8_t own_mac[6];
     esp_read_mac(own_mac, ESP_MAC_WIFI_STA);
@@ -95,19 +96,18 @@ uint32_t MeshConductor::computeScore() {
     esp_mesh_get_routing_table(routing_table, MESH_MAX_NODES, &table_size);
     uint8_t peers = (table_size > 1) ? (uint8_t)(table_size - 1) : 0;
 
-    // MAC tiebreaker: last 2 bytes as uint16_t
-    uint16_t mac_tb = ((uint16_t)own_mac[4] << 8) | own_mac[5];
+    // MAC tiebreaker: last 2 bytes, scaled small so it never outweighs real factors
+    double mac_tb = (double)(((uint16_t)own_mac[4] << 8) | own_mac[5]) / 65536.0;
 
-    if (battery < ELECT_BATTERY_FLOOR_MV) {
-        // Disqualified — score is just mac_tb so that if ALL nodes are
-        // below floor we still get a deterministic winner by battery.
-        return mac_tb;
-    }
+    double score = (double)battery    * (float)NvsConfigManager::electWBattery
+                 + (double)peers      * (float)NvsConfigManager::electWAdjacency
+                 - (double)s_gwTenure * (float)NvsConfigManager::electWTenure
+                 + mac_tb;
 
-    uint32_t score = (uint32_t)battery * ELECT_W_BATTERY
-                   + (uint32_t)peers   * ELECT_W_ADJACENCY
-                   - (uint32_t)s_gwTenure * ELECT_W_TENURE
-                   + mac_tb;
+    // Below battery floor: heavy penalty, but not disqualifying
+    if (battery < ELECT_BATTERY_FLOOR_MV)
+        score *= (float)NvsConfigManager::electWLowbatPenalty;
+
     return score;
 }
 
@@ -150,36 +150,15 @@ static void assignRole(const uint8_t* winnerMac) {
 static const uint8_t* pickWinner() {
     if (s_scoreCount == 0) return nullptr;
 
-    // Check if ALL nodes are below battery floor
-    bool allBelowFloor = true;
-    for (uint8_t i = 0; i < s_scoreCount; i++) {
-        if (s_scores[i].battery_mv >= ELECT_BATTERY_FLOOR_MV) {
-            allBelowFloor = false;
-            break;
-        }
-    }
-
-    if (allBelowFloor) {
-        // Graceful degradation: highest battery wins
-        uint8_t best = 0;
-        for (uint8_t i = 1; i < s_scoreCount; i++) {
-            if (s_scores[i].battery_mv > s_scores[best].battery_mv) {
-                best = i;
-            } else if (s_scores[i].battery_mv == s_scores[best].battery_mv) {
-                // Tiebreak by MAC
-                uint16_t tb_i = ((uint16_t)s_scores[i].mac[4] << 8) | s_scores[i].mac[5];
-                uint16_t tb_b = ((uint16_t)s_scores[best].mac[4] << 8) | s_scores[best].mac[5];
-                if (tb_i > tb_b) best = i;
-            }
-        }
-        return s_scores[best].mac;
-    }
-
-    // Normal: highest score wins
+    // Highest score wins (low-battery penalty is already baked in)
     uint8_t best = 0;
     for (uint8_t i = 1; i < s_scoreCount; i++) {
         if (s_scores[i].score > s_scores[best].score) {
             best = i;
+        } else if (s_scores[i].score == s_scores[best].score) {
+            // Exact tie: highest MAC wins
+            if (memcmp(s_scores[i].mac, s_scores[best].mac, 6) > 0)
+                best = i;
         }
     }
     return s_scores[best].mac;
@@ -207,7 +186,7 @@ static void electionTimerCallback(TimerHandle_t xTimer) {
 
     Serial.printf("[mesh] Election: %d candidates\n", s_scoreCount);
     for (uint8_t i = 0; i < s_scoreCount; i++) {
-        Serial.printf("[mesh]   %02X:%02X:%02X:%02X:%02X:%02X  bat=%umV peers=%u tenure=%u score=%lu\n",
+        Serial.printf("[mesh]   %02X:%02X:%02X:%02X:%02X:%02X  bat=%umV peers=%u tenure=%u score=%.1f\n",
             s_scores[i].mac[0], s_scores[i].mac[1], s_scores[i].mac[2],
             s_scores[i].mac[3], s_scores[i].mac[4], s_scores[i].mac[5],
             s_scores[i].battery_mv, s_scores[i].peer_count,
@@ -332,7 +311,7 @@ static void meshRxTask(void* pvParameters) {
                 }
                 if (!dup && s_scoreCount < MESH_MAX_NODES) {
                     s_scores[s_scoreCount++] = *incoming;
-                    Serial.printf("[mesh] Received election score from %02X:%02X:%02X:%02X:%02X:%02X score=%lu\n",
+                    Serial.printf("[mesh] Received election score from %02X:%02X:%02X:%02X:%02X:%02X score=%.1f\n",
                         incoming->mac[0], incoming->mac[1], incoming->mac[2],
                         incoming->mac[3], incoming->mac[4], incoming->mac[5],
                         incoming->score);

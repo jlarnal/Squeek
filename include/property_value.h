@@ -3,6 +3,7 @@
 
 #include <nvs.h>
 #include <esp_log.h>
+#include <string.h>
 
 // NVS handle and state, defined in nvs_config.cpp
 namespace NvsConfig {
@@ -23,6 +24,12 @@ namespace NvsConfig {
 
     inline esp_err_t nvsWrite(const char* key, uint64_t value) {
         return nvs_set_u64(handle, key, value);
+    }
+
+    inline esp_err_t nvsWrite(const char* key, float value) {
+        uint32_t bits;
+        memcpy(&bits, &value, sizeof(bits));
+        return nvs_set_u32(handle, key, bits);
     }
 }
 

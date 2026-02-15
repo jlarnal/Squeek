@@ -18,7 +18,7 @@ struct __attribute__((packed)) ElectionScore {
     uint16_t battery_mv;
     uint8_t  peer_count;        // number of peers this node can see
     uint16_t gateway_tenure;    // times this node has been gateway (from NVS)
-    uint32_t score;             // pre-computed score
+    double   score;             // pre-computed score (double for overflow safety)
 };
 
 // --- IMeshRole abstract interface ---
@@ -76,7 +76,7 @@ public:
     static void printStatus();
 
     // Election
-    static uint32_t computeScore();
+    static double computeScore();
     static void runElection();
 
     // Debug

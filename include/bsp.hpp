@@ -52,11 +52,8 @@
 #define MESH_CHANNEL         1
 #define MESH_MAX_LAYER       4
 
-// Election weights
-#define ELECT_BATTERY_FLOOR_MV 2900  // below this: disqualified from Gateway
-#define ELECT_W_BATTERY      10
-#define ELECT_W_ADJACENCY    5000
-#define ELECT_W_TENURE       8000
+// Election
+#define ELECT_BATTERY_FLOOR_MV  2900    // below this: heavy score penalty (not disqualifying)
 
 // Election timing
 #define ELECT_SETTLE_MS      3000    // wait for mesh to stabilize before election

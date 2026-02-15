@@ -6,10 +6,18 @@
 // NVS keys
 inline constexpr char NVS_KEY_SHASH[]  = "sHash";
 inline constexpr char NVS_KEY_LEDSEN[] = "ledsEn";
+inline constexpr char NVS_KEY_EW_BAT[] = "ewBat";
+inline constexpr char NVS_KEY_EW_ADJ[] = "ewAdj";
+inline constexpr char NVS_KEY_EW_TEN[] = "ewTen";
+inline constexpr char NVS_KEY_EW_LBP[] = "ewLbp";
 
 // --- Default values (extend this list as members grow) ---
 
-inline constexpr bool DEFAULT_LEDS_ENABLED = true;
+inline constexpr bool  DEFAULT_LEDS_ENABLED       = true;
+inline constexpr float DEFAULT_ELECT_W_BATTERY     = 1.0f;
+inline constexpr float DEFAULT_ELECT_W_ADJACENCY   = 5.0f;
+inline constexpr float DEFAULT_ELECT_W_TENURE      = 8.0f;
+inline constexpr float DEFAULT_ELECT_W_LOWBAT_PEN  = 0.1f;
 
 // --- Compile-time settings hash (FNV-1a) ---
 //     Changes automatically when any default value above is modified.
@@ -25,10 +33,30 @@ namespace detail {
     constexpr uint64_t fnvBool(uint64_t hash, bool v) {
         return fnvByte(hash, v ? 1 : 0);
     }
+
+    constexpr uint64_t fnvFloat(uint64_t hash, float v) {
+        uint32_t bits = __builtin_bit_cast(uint32_t, v);
+        hash = fnvByte(hash, (uint8_t)(bits >> 24));
+        hash = fnvByte(hash, (uint8_t)(bits >> 16));
+        hash = fnvByte(hash, (uint8_t)(bits >> 8));
+        hash = fnvByte(hash, (uint8_t)(bits));
+        return hash;
+    }
 }
 
-inline constexpr uint64_t SETTINGS_HASH =
-    detail::fnvBool(detail::FNV_OFFSET, DEFAULT_LEDS_ENABLED);
+namespace detail {
+    constexpr uint64_t computeSettingsHash() {
+        uint64_t h = FNV_OFFSET;
+        h = fnvBool(h,  DEFAULT_LEDS_ENABLED);
+        h = fnvFloat(h, DEFAULT_ELECT_W_BATTERY);
+        h = fnvFloat(h, DEFAULT_ELECT_W_ADJACENCY);
+        h = fnvFloat(h, DEFAULT_ELECT_W_TENURE);
+        h = fnvFloat(h, DEFAULT_ELECT_W_LOWBAT_PEN);
+        return h;
+    }
+}
+
+inline constexpr uint64_t SETTINGS_HASH = detail::computeSettingsHash();
 
 // --- NvsConfigManager ---
 
@@ -50,6 +78,12 @@ public:
 
     /// Whether LEDs (status + RGB) are enabled.
     static PropertyValue<NVS_KEY_LEDSEN, bool, NvsConfigManager>    ledsEnabled;
+
+    // Election weight factors (tunable via NVS, see mesh_conductor.cpp)
+    static PropertyValue<NVS_KEY_EW_BAT, float, NvsConfigManager>   electWBattery;
+    static PropertyValue<NVS_KEY_EW_ADJ, float, NvsConfigManager>   electWAdjacency;
+    static PropertyValue<NVS_KEY_EW_TEN, float, NvsConfigManager>   electWTenure;
+    static PropertyValue<NVS_KEY_EW_LBP, float, NvsConfigManager>   electWLowbatPenalty;
 };
 
 #endif // NVS_CONFIG_H

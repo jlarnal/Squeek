@@ -170,16 +170,21 @@ Each node maintains a local map of the mesh it belongs to, stored in two tiers:
 
 ### Firmware Layers (all nodes, identical firmware)
 
-| Layer | Responsibility |
-|-------|---------------|
-| **BSP** | `include/bsp.hpp` — pin definitions, peripherals, board constants |
-| **Power Manager** | Sleep mode control, battery ADC, wake scheduling, LED brightness/duration limits |
-| **Mesh Manager** | WiFi mesh join/heal, gateway election, message routing, node wake via DTIM |
-| **Localization Engine** | FTM round scheduling, distance matrix, 3D position solver (trilateration/MDS) |
-| **Audio Engine** | Modular: Mozzi synthesis + MP3 decode → abstract output (piezo driver / I2S driver) |
-| **Storage** | LittleFS: samples, node config, sequences, position cache |
-| **Orchestrator** | Play modes, sequence execution, scheduling, stealth mode |
-| **Gateway Services** | Web server, SoftAP, REST API, UI assets (active on elected gateway only) |
+| Layer | Class / File | Responsibility |
+|-------|-------------|---------------|
+| **BSP** | `include/bsp.hpp` | Pin definitions, peripherals, board constants, power macros |
+| **NvsConfigManager** | `nvs_config.h/cpp`, `property_value.h` | Persistent settings via NVS with auto-sync `PropertyValue<>` template, compile-time hash detection, factory reset |
+| **LedDriver** | `led_driver.h/cpp` | Status + WS2812 RGB control, non-blocking blink task, master enable/disable |
+| **PowerManager** | `power_manager.h/cpp` | Battery ADC (calibrated), low/critical thresholds, sleep wrappers (static class) |
+| **RtcMap** | `rtc_mesh_map.h/cpp` | RTC slow-memory mesh map with checksummed save/restore (static class) |
+| **MeshConductor** | `mesh_conductor.h/cpp`, `mesh_gateway.cpp`, `mesh_node.cpp` | WiFi mesh join/heal, weighted gateway election, `IMeshRole` strategy (Gateway / MeshNode), message routing |
+| **Localization Engine** | `ftm_manager.h/cpp`, `position_solver.h/cpp` | FTM round scheduling, distance matrix, 3D position solver (trilateration/MDS) |
+| **Audio Engine** | `audio_engine.h/cpp`, `audio_tweeter.h/cpp`, `audio_i2s.h/cpp`, `tone_library.h/cpp`, `sample_player.h/cpp` | Modular: Mozzi synthesis + MP3 decode → abstract output (piezo driver / I2S driver) |
+| **Storage** | `storage_manager.h/cpp` | LittleFS: samples, node config, sequences, position cache |
+| **Orchestrator** | `orchestrator.h/cpp`, `clock_sync.h/cpp` | Play modes, sequence execution, mesh clock sync, scheduling |
+| **Gateway Services** | `web_server.h/cpp` | Web server, SoftAP, REST API, UI assets (active on elected gateway only) |
+| **Stealth & OTA** | `stealth_manager.h/cpp`, `ota_manager.h/cpp` | Stealth mode (hide AP), OTA firmware updates |
+| **Debug Menu** | `debug_menu.h/cpp` | Compile-time serial debug menu with animated marquee and per-phase test entries |
 
 ### Node Lifecycle State Machine
 
@@ -227,16 +232,19 @@ LOW_BATTERY → DEEP_SLEEP (timer-only wake for periodic check)
 
 ## 5. Implementation Phases
 
-### Phase 1 — Mesh & Blink
+### Phase 1 — Mesh & Blink  ✅ IMPLEMENTED
 **Goal:** Two or more nodes form a self-healing mesh and prove it works.
 
-- WiFi mesh formation with auto-join
-- Gateway election (highest MAC wins, re-election on timeout)
-- Brief WS2812 heartbeat flash (then off — save battery)
-- Battery voltage ADC reading + serial logging
-- Light sleep between heartbeats
-- RTC mesh map: own ID, gateway MAC, peer table
-- **Deliverable:** Scatter nodes, they find each other. Kill the gateway, another takes over.
+- [x] WiFi mesh formation with auto-join (`MeshConductor::init/start`, ESP-IDF `esp_mesh`)
+- [x] Gateway election — weighted score: battery level, peer adjacency, tenure penalty, MAC tiebreak (`MeshConductor::runElection`, `ElectionScore` broadcast)
+- [x] `IMeshRole` strategy pattern — `Gateway` and `MeshNode` concrete roles, swapped at runtime
+- [x] LedDriver with non-blocking FreeRTOS blink task, HSV/RGB, master enable/disable
+- [x] Battery voltage ADC via calibrated oneshot + voltage divider (`PowerManager`)
+- [x] Light sleep between heartbeats (via `SQ_POWER_DELAY` macro, suppressed in debug builds)
+- [x] RTC slow-memory mesh map with checksummed save/restore (`RtcMap`)
+- [x] NvsConfigManager with `PropertyValue<>` auto-persistence, compile-time settings hash, factory reset
+- [x] Debug menu with animated marquee and 7 interactive test entries
+- **Deliverable:** Scatter nodes, they find each other. Kill the gateway, another takes over. Serial debug menu for hardware testing.
 
 ### Phase 2 — FTM Localization
 **Goal:** Nodes know where they are in 3D space.
@@ -294,21 +302,150 @@ LOW_BATTERY → DEEP_SLEEP (timer-only wake for periodic check)
 
 ## 6. Key Files
 
+### Build & Configuration
+
 | File | Purpose |
 |------|---------|
-| `include/bsp.hpp` | Board support — pin definitions, hardware constants |
-| `src/main.cpp` | Application entry point (currently skeleton) |
-| `platformio.ini` | Build config, dual framework, board definition |
+| `platformio.ini` | Build config, dual Arduino + ESP-IDF framework, board definition, library deps |
 | `sdkconfig.defaults` | ESP-IDF defaults (FreeRTOS tick, flash, Arduino autostart) |
 | `sdkconfig.esp32c6-supermini` | Board-specific SDK config |
+| `src/CMakeLists.txt` | ESP-IDF component registration — lists all 22 source files |
+
+### Core Infrastructure (implemented)
+
+| File | Purpose | Status |
+|------|---------|--------|
+| `include/bsp.hpp` | Pin definitions, hardware constants, version, power macros (`SQ_LIGHT_SLEEP`, etc.) | Done |
+| `src/main.cpp` | Application entry point — init sequence, heartbeat loop | Done |
+| `include/property_value.h` | `PropertyValue<nvsKey, T, Owner>` template — auto-persisting typed values with NVS write-through, `BeforeChangeFn` callback with override/cancel support | Done |
+| `include/nvs_config.h` | `NvsConfigManager` class — compile-time `SETTINGS_HASH` (FNV-1a), default values, NVS keys | Done |
+| `src/nvs_config.cpp` | NVS init, hash-mismatch detection, `restoreFactoryDefault()`, `reloadFromNvs()` | Done |
+| `include/led_driver.h` | `LedDriver` static class — status + RGB LED API, `RgbColor` / `HsvColor` structs | Done |
+| `src/led_driver.cpp` | FreeRTOS blink task, master enable/disable, HSV/RGB conversion, duty-cycle blinking | Done |
+| `include/power_manager.h` | `PowerManager` static class — battery ADC, sleep wrappers | Done |
+| `src/power_manager.cpp` | ADC oneshot with curve-fitting calibration, voltage divider math, sleep delegates | Done |
+| `include/rtc_mesh_map.h` | `RtcMap` static class + `rtc_mesh_map_t` struct — RTC slow-memory mesh map | Done |
+| `src/rtc_mesh_map.cpp` | Checksummed save/restore, `RTC_DATA_ATTR` storage, init/clear/print | Done |
+| `include/debug_menu.h` | Debug menu entry point declaration | Done |
+| `src/debug_menu.cpp` | Animated marquee, 7 Phase-1 test entries, serial interaction loop | Done |
+
+### Phase 1 — Mesh & Election (implemented)
+
+| File | Purpose | Status |
+|------|---------|--------|
+| `include/mesh_conductor.h` | `MeshConductor` static orchestrator, `IMeshRole` interface, `Gateway` / `MeshNode` classes, `ElectionScore` packet | Done |
+| `src/mesh_conductor.cpp` | WiFi mesh init, ESP-IDF mesh event handler, weighted election (battery + adjacency + tenure + MAC tiebreak), mesh RX task, root waiving | Done |
+| `src/mesh_gateway.cpp` | `Gateway::begin/end/onPeerJoined/onPeerLeft/printStatus` — gateway role behavior | Done (Phase 1 stub, extended in Phase 5) |
+| `src/mesh_node.cpp` | `MeshNode::begin/end/onPeerJoined/onPeerLeft/onGatewayLost` — peer role behavior | Done (Phase 1 stub) |
+
+### Phase 2 — FTM Localization (stub)
+
+| File | Purpose | Status |
+|------|---------|--------|
+| `include/ftm_manager.h` | FTM initiator/responder, round-robin scheduling | Stub |
+| `src/ftm_manager.cpp` | FTM API wrapper, distance measurement, sample averaging | Stub |
+| `include/position_solver.h` | 3D position solver (MDS / trilateration) | Stub |
+| `src/position_solver.cpp` | Distance matrix → 3D coordinates | Stub |
+
+### Phase 3 — Audio Engine (stub)
+
+| File | Purpose | Status |
+|------|---------|--------|
+| `include/audio_engine.h` | Audio engine orchestrator — abstract output interface | Stub |
+| `src/audio_engine.cpp` | Mozzi integration, playback coordination | Stub |
+| `include/audio_tweeter.h` | Piezo buzzer driver (push-pull, two GPIOs) | Stub |
+| `src/audio_tweeter.cpp` | GPIO push-pull waveform generation | Stub |
+| `include/audio_i2s.h` | I2S DAC output driver (future) | Stub |
+| `src/audio_i2s.cpp` | I2S configuration and DMA feed | Stub |
+| `include/tone_library.h` | Procedural tone definitions — chirps, squeaks, warbles | Stub |
+| `src/tone_library.cpp` | Mozzi patch parameter sets | Stub |
+| `include/sample_player.h` | MP3 sample decoder (libhelix) | Stub |
+| `src/sample_player.cpp` | LittleFS read → MP3 decode → audio output | Stub |
+
+### Phase 4 — Orchestrator (stub)
+
+| File | Purpose | Status |
+|------|---------|--------|
+| `include/orchestrator.h` | Play mode coordinator — traveling sound, random pop-up, triggered sequences | Stub |
+| `src/orchestrator.cpp` | Spatial path computation, sequence execution | Stub |
+| `include/clock_sync.h` | Mesh clock synchronization | Stub |
+| `src/clock_sync.cpp` | NTP or mesh-internal time sync for coordinated playback | Stub |
+
+### Phase 5 — Web UI (stub)
+
+| File | Purpose | Status |
+|------|---------|--------|
+| `include/web_server.h` | Gateway web server — SoftAP, REST API, static assets | Stub |
+| `src/web_server.cpp` | ESPAsyncWebServer routes, JSON endpoints, file upload | Stub |
+| `include/storage_manager.h` | LittleFS management — sample storage, config persistence | Stub |
+| `src/storage_manager.cpp` | File CRUD, space accounting, format/mount | Stub |
+
+### Phase 6 — Stealth & Polish (stub)
+
+| File | Purpose | Status |
+|------|---------|--------|
+| `include/stealth_manager.h` | Stealth mode — hide AP, schedule-only operation | Stub |
+| `src/stealth_manager.cpp` | AP visibility control, stealth timer, exit conditions | Stub |
+| `include/ota_manager.h` | OTA firmware update | Stub |
+| `src/ota_manager.cpp` | OTA manifest check, download, flash, reboot | Stub |
 
 ---
 
-## 7. Open Questions
+## 7. Class Architecture Notes
+
+All major subsystem classes use the **static class** pattern: deleted constructor, all-static public API, file-scope state in the `.cpp` file. This avoids singleton boilerplate while keeping state encapsulated.
+
+### 7.1 NvsConfigManager & PropertyValue
+
+`NvsConfigManager` owns all persistent user-facing settings. Each setting is a `PropertyValue<nvsKey, T, Owner>` instance — a typed wrapper that auto-persists to NVS on assignment and restricts write access to the `friend Owner` class.
+
+**Key mechanisms:**
+
+- **Auto-persistence:** `PropertyValue::operator=` writes the new value to NVS and commits immediately. The `loadInitial()` private method bypasses both NVS write-back and the callback (used only during startup load from NVS).
+
+- **`BeforeChangeFn` callback:** `void(*)(T oldValue, T newValue, T* override, bool* cancel)` — fires before a value change is stored. The callback can:
+  - Inspect the old and proposed new values
+  - Modify `*override` to substitute a different value
+  - Set `*cancel = true` to abort the change entirely
+  - Trigger side effects in other subsystems (e.g., `LedDriver::setEnabled()`)
+
+- **`settingHash` (private):** A compile-time FNV-1a hash (`SETTINGS_HASH`) computed over all members' default values. On boot, `begin()` reads the stored hash from NVS. If absent or mismatched (meaning firmware defaults changed since last flash), `restoreFactoryDefault(0xBEEFF00D)` is called to overwrite ALL NVS-backed members with their compile-time defaults.
+
+- **`restoreFactoryDefault(uint32_t safeKey)`:** Resets every member to its default and writes them to NVS. The `safeKey` must equal `0xBEEFF00D` or the call is a no-op. This safety guard prevents accidental invocation.
+
+- **Adding a new setting** requires:
+  1. An `inline constexpr char NVS_KEY_xxx[]` and a `DEFAULT_xxx` constant in `nvs_config.h`
+  2. One more `fnv*` chain step in the `SETTINGS_HASH` constexpr
+  3. A `static PropertyValue<...>` member in `NvsConfigManager`
+  4. One `loadInitial()` line in `reloadFromNvs()`
+  5. One assignment line in `restoreFactoryDefault()`
+
+**Current members:**
+
+| Member | Type | NVS Key | Default | Visibility | Purpose |
+|--------|------|---------|---------|------------|---------|
+| `settingHash` | `uint64_t` | `"sHash"` | `SETTINGS_HASH` | **private** | Compile-time defaults fingerprint |
+| `ledsEnabled` | `bool` | `"ledsEn"` | `true` | public | Master LED enable/disable; LedDriver obeys via `BeforeChangeFn` |
+
+### 7.2 LedDriver
+
+`LedDriver` manages both the GPIO15 status LED and the WS2812 RGB LED through a unified static API with a FreeRTOS background blink task.
+
+**Key mechanisms:**
+
+- **Master enable/disable:** `setEnabled(bool)` controlled by `NvsConfigManager::ledsEnabled` via a `BeforeChangeFn` callback. When disabled, all "turn on" API calls are silently ignored (except off commands), and both LEDs are forced off. Blink configuration is preserved so blinking resumes automatically on re-enable.
+
+- **Guard strategy:** Direct-write methods (`statusOn`, `statusFlash`, `rgbSet`) check `s_ledsEnabled` and early-return. Config-only methods (`statusBlink`, `rgbBlink`) store parameters freely. The blink task has its own master kill-switch at the top of the loop. Off methods are never guarded.
+
+- **Blink task:** A single FreeRTOS task handles both LEDs with independent period/duty-cycle timers. The task is suspended when no blinking is active and resumed on demand via `assetLedDriverTaskState()`.
+
+---
+
+## 8. Open Questions
 
 1. **Piezo GPIO assignment** — Which two GPIOs for push-pull piezo? Needs to be added to `bsp.hpp`.
-2. **Battery ADC GPIO** — GPIO2 or GPIO3? Depends on what's free after piezo assignment.
-3. **ESP-IDF WiFi Mesh vs ESP-NOW** — WiFi Mesh (`esp_mesh`) provides routing but is heavier. ESP-NOW is lighter but no mesh routing. Need to evaluate which fits better with FTM and light sleep.
+2. ~~**Battery ADC GPIO**~~ — Resolved: GPIO2 (`BATTERY_ADC_PIN`), defined in `bsp.hpp`.
+3. ~~**ESP-IDF WiFi Mesh vs ESP-NOW**~~ — Resolved: using `esp_mesh` (ESP-IDF WiFi Mesh). Implemented in `MeshConductor`.
 4. **Mozzi on ESP32-C6** — Needs a compilation test early in Phase 3. Fallback: direct LEDC PWM synthesis.
 5. **FTM accuracy in practice** — Real-world testing needed in Phase 2 to calibrate expectations for 3D positioning.
 6. **Web UI framework** — Vanilla JS for minimal size, or a lightweight framework? Storage budget is limited (4MB flash shared with firmware + samples).
