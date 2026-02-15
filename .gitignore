@@ -5,6 +5,7 @@
 .vscode/ipch
 sdkconfig
 managed_components/
+.claude/*
 .CLAUDE.md
 build_log.txt
 monitor_log.txt

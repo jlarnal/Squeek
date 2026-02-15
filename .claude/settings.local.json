@@ -17,5 +17,6 @@
       "Bash(if exist \"G:\\\\sources\\\\Esp32\\\\Squeek\\\\managed_components\\\\chmorgan__esp-libhelix-mp3\\\\libhelix-mp3\\\\real\" rmdir /s /q \"G:\\\\sources\\\\Esp32\\\\Squeek\\\\managed_components\\\\chmorgan__esp-libhelix-mp3\\\\libhelix-mp3\\\\real\")"
     ]
   },
+  "spinnerTipsEnabled": true,
   "prefersReducedMotion": true
 }
