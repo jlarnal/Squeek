@@ -65,7 +65,7 @@ Nodes use WiFi FTM to build a 3D spatial map of the flotilla without any manual 
 - One node is elected as gateway (serves web UI, coordinates playback, schedules FTM)
 - If the gateway goes offline, another node is elected automatically
 - Gateway provides a WiFi SoftAP for the controller (smartphone/laptop) to connect
-- Election strategy: simplest viable (e.g. highest MAC wins), re-election on gateway timeout
+- Election strategy: weighted score (battery + adjacency - tenure + MAC tiebreak), NVS-tunable weights, re-election on gateway loss (see Section 7.2)
 
 ### FR3 — FTM Self-Localization
 - Nodes perform pairwise FTM ranging to estimate inter-node distances
@@ -177,7 +177,7 @@ Each node maintains a local map of the mesh it belongs to, stored in two tiers:
 | **LedDriver** | `led_driver.h/cpp` | Status + WS2812 RGB control, non-blocking blink task, master enable/disable |
 | **PowerManager** | `power_manager.h/cpp` | Battery ADC (calibrated), low/critical thresholds, sleep wrappers (static class) |
 | **RtcMap** | `rtc_mesh_map.h/cpp` | RTC slow-memory mesh map with checksummed save/restore (static class) |
-| **MeshConductor** | `mesh_conductor.h/cpp`, `mesh_gateway.cpp`, `mesh_node.cpp` | WiFi mesh join/heal, weighted gateway election, `IMeshRole` strategy (Gateway / MeshNode), message routing |
+| **MeshConductor** | `mesh_conductor.h/cpp`, `mesh_gateway.cpp`, `mesh_node.cpp` | WiFi mesh join/heal, NVS-tunable weighted gateway election (`double` score), `IMeshRole` strategy (Gateway / MeshNode), message routing |
 | **Localization Engine** | `ftm_manager.h/cpp`, `position_solver.h/cpp` | FTM round scheduling, distance matrix, 3D position solver (trilateration/MDS) |
 | **Audio Engine** | `audio_engine.h/cpp`, `audio_tweeter.h/cpp`, `audio_i2s.h/cpp`, `tone_library.h/cpp`, `sample_player.h/cpp` | Modular: Mozzi synthesis + MP3 decode → abstract output (piezo driver / I2S driver) |
 | **Storage** | `storage_manager.h/cpp` | LittleFS: samples, node config, sequences, position cache |
@@ -415,7 +415,7 @@ All major subsystem classes use the **static class** pattern: deleted constructo
 
 - **Adding a new setting** requires:
   1. An `inline constexpr char NVS_KEY_xxx[]` and a `DEFAULT_xxx` constant in `nvs_config.h`
-  2. One more `fnv*` chain step in the `SETTINGS_HASH` constexpr
+  2. One more `fnv*` line in `detail::computeSettingsHash()`
   3. A `static PropertyValue<...>` member in `NvsConfigManager`
   4. One `loadInitial()` line in `reloadFromNvs()`
   5. One assignment line in `restoreFactoryDefault()`
@@ -426,8 +426,38 @@ All major subsystem classes use the **static class** pattern: deleted constructo
 |--------|------|---------|---------|------------|---------|
 | `settingHash` | `uint64_t` | `"sHash"` | `SETTINGS_HASH` | **private** | Compile-time defaults fingerprint |
 | `ledsEnabled` | `bool` | `"ledsEn"` | `true` | public | Master LED enable/disable; LedDriver obeys via `BeforeChangeFn` |
+| `electWBattery` | `float` | `"ewBat"` | `1.0` | public | Election weight per mV of battery |
+| `electWAdjacency` | `float` | `"ewAdj"` | `5.0` | public | Election weight per visible peer |
+| `electWTenure` | `float` | `"ewTen"` | `8.0` | public | Election penalty per past gateway term |
+| `electWLowbatPenalty` | `float` | `"ewLbp"` | `0.1` | public | Score multiplier when below `ELECT_BATTERY_FLOOR_MV` |
 
-### 7.2 LedDriver
+**Supported `PropertyValue` types:** `bool`, `uint16_t`, `uint32_t`, `uint64_t`, `float` (stored as bit-cast `uint32_t` in NVS).
+
+### 7.2 MeshConductor — Election Scoring
+
+Gateway election uses a `double` score computed by `MeshConductor::computeScore()`. All weight factors are NVS-backed `PropertyValue<float>` members of `NvsConfigManager`, tunable at runtime without reflashing.
+
+**Score formula:**
+
+```
+score = battery_mv   * electWBattery
+      + peer_count   * electWAdjacency
+      - gw_tenure    * electWTenure
+      + mac_tiebreak                    (normalized to [0, 1))
+
+if battery_mv < ELECT_BATTERY_FLOOR_MV:
+    score *= electWLowbatPenalty
+```
+
+- **Battery** dominates: the healthiest node should be gateway (battery-powered mesh).
+- **Adjacency** rewards well-connected nodes (better relay candidates).
+- **Tenure** penalizes nodes that have been gateway too many times (spreads battery drain).
+- **Low-battery penalty** is a multiplier (default `0.1` = 90% penalty), not a disqualification — a low-battery node can still win if all others are worse.
+- **MAC tiebreak** is the last 2 bytes of the MAC divided by 65536, ensuring a deterministic winner on exact ties without influencing real factors.
+
+The score is broadcast as a `double` in the `ElectionScore` packed struct over the mesh. The highest score wins; exact ties fall back to full MAC comparison.
+
+### 7.3 LedDriver
 
 `LedDriver` manages both the GPIO15 status LED and the WS2812 RGB LED through a unified static API with a FreeRTOS background blink task.
 
