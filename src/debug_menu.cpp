@@ -29,8 +29,8 @@ static bool marquee_animation()
 
     flushSerialInput();
     Serial.println();
-
-    while (1) {
+    uint32_t startTime = millis();
+    while ((millis() - startTime) < DEBUG_MENU_TIMEOUT_MS) {
         // Scrolling banner
         int offset = frame % (banner_len + width);
         Serial.print("\r  ");
