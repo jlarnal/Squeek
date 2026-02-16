@@ -35,7 +35,6 @@
 // ---------------------------------------------------------------------------
 #ifdef DEBUG_MENU_ENABLED
 
-#define DEBUG_MENU_TIMEOUT_MS 15000
 #define SQ_LIGHT_SLEEP(ms)   delay(ms)
 #define SQ_DEEP_SLEEP(ms)    do { Serial.println("[DBG] deep-sleep suppressed"); delay(ms); } while(0)
 #define SQ_POWER_DELAY(ms)   delay(ms)

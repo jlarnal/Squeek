@@ -10,6 +10,7 @@ inline constexpr char NVS_KEY_EW_BAT[] = "ewBat";
 inline constexpr char NVS_KEY_EW_ADJ[] = "ewAdj";
 inline constexpr char NVS_KEY_EW_TEN[] = "ewTen";
 inline constexpr char NVS_KEY_EW_LBP[] = "ewLbp";
+inline constexpr char NVS_KEY_DBGTMO[] = "dbgTmo";
 
 // --- Default values (extend this list as members grow) ---
 
@@ -18,6 +19,7 @@ inline constexpr float DEFAULT_ELECT_W_BATTERY     = 1.0f;
 inline constexpr float DEFAULT_ELECT_W_ADJACENCY   = 5.0f;
 inline constexpr float DEFAULT_ELECT_W_TENURE      = 8.0f;
 inline constexpr float DEFAULT_ELECT_W_LOWBAT_PEN  = 0.1f;
+inline constexpr uint32_t DEFAULT_DEBUG_TIMEOUT_MS  = 15000;
 
 // --- Compile-time settings hash (FNV-1a) ---
 //     Changes automatically when any default value above is modified.
@@ -42,6 +44,14 @@ namespace detail {
         hash = fnvByte(hash, (uint8_t)(bits));
         return hash;
     }
+
+    constexpr uint64_t fnvU32(uint64_t hash, uint32_t v) {
+        hash = fnvByte(hash, (uint8_t)(v >> 24));
+        hash = fnvByte(hash, (uint8_t)(v >> 16));
+        hash = fnvByte(hash, (uint8_t)(v >> 8));
+        hash = fnvByte(hash, (uint8_t)(v));
+        return hash;
+    }
 }
 
 namespace detail {
@@ -52,6 +62,7 @@ namespace detail {
         h = fnvFloat(h, DEFAULT_ELECT_W_ADJACENCY);
         h = fnvFloat(h, DEFAULT_ELECT_W_TENURE);
         h = fnvFloat(h, DEFAULT_ELECT_W_LOWBAT_PEN);
+        h = fnvU32(h,  DEFAULT_DEBUG_TIMEOUT_MS);
         return h;
     }
 }
@@ -84,6 +95,9 @@ public:
     static PropertyValue<NVS_KEY_EW_ADJ, float, NvsConfigManager>   electWAdjacency;
     static PropertyValue<NVS_KEY_EW_TEN, float, NvsConfigManager>   electWTenure;
     static PropertyValue<NVS_KEY_EW_LBP, float, NvsConfigManager>   electWLowbatPenalty;
+
+    /// Debug menu marquee timeout in ms (0 = infinite).
+    static PropertyValue<NVS_KEY_DBGTMO, uint32_t, NvsConfigManager> debugTimeout_ms;
 };
 
 #endif // NVS_CONFIG_H

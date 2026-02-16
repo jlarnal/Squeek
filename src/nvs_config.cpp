@@ -19,6 +19,7 @@ PropertyValue<NVS_KEY_EW_BAT, float, NvsConfigManager>    NvsConfigManager::elec
 PropertyValue<NVS_KEY_EW_ADJ, float, NvsConfigManager>    NvsConfigManager::electWAdjacency(DEFAULT_ELECT_W_ADJACENCY);
 PropertyValue<NVS_KEY_EW_TEN, float, NvsConfigManager>    NvsConfigManager::electWTenure(DEFAULT_ELECT_W_TENURE);
 PropertyValue<NVS_KEY_EW_LBP, float, NvsConfigManager>    NvsConfigManager::electWLowbatPenalty(DEFAULT_ELECT_W_LOWBAT_PEN);
+PropertyValue<NVS_KEY_DBGTMO, uint32_t, NvsConfigManager> NvsConfigManager::debugTimeout_ms(DEFAULT_DEBUG_TIMEOUT_MS);
 
 // NVS read helpers
 
@@ -53,6 +54,17 @@ static float nvsGetFloat(const char* key, float defaultValue)
         memcpy(&v, &bits, sizeof(v));
         return v;
     }
+    if (err != ESP_ERR_NVS_NOT_FOUND)
+        ESP_LOGE(TAG, "nvs_get_u32(%s) failed: %s", key, esp_err_to_name(err));
+    return defaultValue;
+}
+
+static uint32_t nvsGetU32(const char* key, uint32_t defaultValue)
+{
+    uint32_t v    = 0;
+    esp_err_t err = nvs_get_u32(NvsConfig::handle, key, &v);
+    if (err == ESP_OK)
+        return v;
     if (err != ESP_ERR_NVS_NOT_FOUND)
         ESP_LOGE(TAG, "nvs_get_u32(%s) failed: %s", key, esp_err_to_name(err));
     return defaultValue;
@@ -99,6 +111,7 @@ void NvsConfigManager::reloadFromNvs()
     electWAdjacency.loadInitial(nvsGetFloat(NVS_KEY_EW_ADJ, DEFAULT_ELECT_W_ADJACENCY));
     electWTenure.loadInitial(nvsGetFloat(NVS_KEY_EW_TEN, DEFAULT_ELECT_W_TENURE));
     electWLowbatPenalty.loadInitial(nvsGetFloat(NVS_KEY_EW_LBP, DEFAULT_ELECT_W_LOWBAT_PEN));
+    debugTimeout_ms.loadInitial(nvsGetU32(NVS_KEY_DBGTMO, DEFAULT_DEBUG_TIMEOUT_MS));
 
     ESP_LOGI(TAG, "Config loaded from NVS");
 }
@@ -116,6 +129,7 @@ bool NvsConfigManager::restoreFactoryDefault(uint32_t safeKey)
     electWAdjacency     = DEFAULT_ELECT_W_ADJACENCY;
     electWTenure        = DEFAULT_ELECT_W_TENURE;
     electWLowbatPenalty  = DEFAULT_ELECT_W_LOWBAT_PEN;
+    debugTimeout_ms      = DEFAULT_DEBUG_TIMEOUT_MS;
 
     return true;
 }

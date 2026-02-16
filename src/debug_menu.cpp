@@ -1,5 +1,6 @@
 #include "debug_menu.h"
 #include "bsp.hpp"
+#include "nvs_config.h"
 #include "led_driver.h"
 #include "power_manager.h"
 #include "mesh_conductor.h"
@@ -30,7 +31,8 @@ static bool marquee_animation()
     flushSerialInput();
     Serial.println();
     uint32_t startTime = millis();
-    while ((millis() - startTime) < DEBUG_MENU_TIMEOUT_MS) {
+    uint32_t timeout   = NvsConfigManager::debugTimeout_ms;
+    while (timeout == 0 || (millis() - startTime) < timeout) {
         // Scrolling banner
         int offset = frame % (banner_len + width);
         Serial.print("\r  ");
@@ -235,6 +237,39 @@ static void menu_light_sleep()
     Serial.println("Woke up from light sleep!");
 }
 
+static void menu_debug_timeout()
+{
+    Serial.printf("Current debug timeout: %lu ms (0 = infinite)\n",
+                  (unsigned long)(uint32_t)NvsConfigManager::debugTimeout_ms);
+    Serial.print("Enter new value in ms (0-60000): ");
+
+    unsigned long start = millis();
+    String input        = "";
+    while (millis() - start < 10000) {
+        if (Serial.available()) {
+            char c = Serial.read();
+            if (c == '\n' || c == '\r')
+                break;
+            input += c;
+        }
+    }
+
+    if (input.length() == 0) {
+        Serial.println("\nNo input, cancelled.");
+        return;
+    }
+
+    long val = input.toInt();
+    if (val < 0 || val > 60000) {
+        Serial.printf("\nOut of range: %ld (must be 0-60000)\n", val);
+        return;
+    }
+
+    NvsConfigManager::debugTimeout_ms = (uint32_t)val;
+    Serial.printf("\nDebug timeout set to %lu ms%s\n",
+                  (unsigned long)val, val == 0 ? " (infinite)" : "");
+}
+
 void debug_menu()
 {
 
@@ -253,6 +288,7 @@ void debug_menu()
         Serial.println("[5] Gateway elect   - Force re-election");
         Serial.println("[6] RTC memory      - Write/readback test");
         Serial.println("[7] Light sleep     - Sleep N seconds");
+        Serial.println("[8] Debug timeout   - Set marquee timeout");
         Serial.println("[0] Exit            - Normal boot");
         Serial.print("> ");
 
@@ -287,6 +323,9 @@ void debug_menu()
                 break;
             case '7':
                 menu_light_sleep();
+                break;
+            case '8':
+                menu_debug_timeout();
                 break;
             case '0':
                 running = false;
