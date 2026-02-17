@@ -11,7 +11,6 @@ inline constexpr char NVS_KEY_EW_BAT[] = "ewBat";
 inline constexpr char NVS_KEY_EW_ADJ[] = "ewAdj";
 inline constexpr char NVS_KEY_EW_TEN[] = "ewTen";
 inline constexpr char NVS_KEY_EW_LBP[] = "ewLbp";
-inline constexpr char NVS_KEY_DBGTMO[] = "dbgTmo";
 inline constexpr char NVS_KEY_CLR_INIT[] = "clrInit";
 inline constexpr char NVS_KEY_CLR_RDY[]  = "clrRdy";
 inline constexpr char NVS_KEY_CLR_GW[]   = "clrGw";
@@ -39,7 +38,6 @@ inline constexpr float    DEFAULT_ELECT_W_BATTERY    = NVS_DEFAULT_ELECT_W_BATTE
 inline constexpr float    DEFAULT_ELECT_W_ADJACENCY  = NVS_DEFAULT_ELECT_W_ADJACENCY;
 inline constexpr float    DEFAULT_ELECT_W_TENURE     = NVS_DEFAULT_ELECT_W_TENURE;
 inline constexpr float    DEFAULT_ELECT_W_LOWBAT_PEN = NVS_DEFAULT_ELECT_W_LOWBAT_PEN;
-inline constexpr uint32_t DEFAULT_DEBUG_TIMEOUT_MS   = NVS_DEFAULT_DEBUG_TIMEOUT_MS;
 inline constexpr uint32_t DEFAULT_CLR_INIT           = NVS_DEFAULT_CLR_INIT;
 inline constexpr uint32_t DEFAULT_CLR_READY          = NVS_DEFAULT_CLR_READY;
 inline constexpr uint32_t DEFAULT_CLR_GATEWAY        = NVS_DEFAULT_CLR_GATEWAY;
@@ -101,7 +99,6 @@ namespace detail {
         h = fnvFloat(h, DEFAULT_ELECT_W_ADJACENCY);
         h = fnvFloat(h, DEFAULT_ELECT_W_TENURE);
         h = fnvFloat(h, DEFAULT_ELECT_W_LOWBAT_PEN);
-        h = fnvU32(h,  DEFAULT_DEBUG_TIMEOUT_MS);
         h = fnvU32(h, DEFAULT_CLR_INIT);
         h = fnvU32(h, DEFAULT_CLR_READY);
         h = fnvU32(h, DEFAULT_CLR_GATEWAY);
@@ -150,9 +147,6 @@ public:
     static PropertyValue<NVS_KEY_EW_ADJ, float, NvsConfigManager>   electWAdjacency;
     static PropertyValue<NVS_KEY_EW_TEN, float, NvsConfigManager>   electWTenure;
     static PropertyValue<NVS_KEY_EW_LBP, float, NvsConfigManager>   electWLowbatPenalty;
-
-    /// Debug menu marquee timeout in ms (0 = infinite).
-    static PropertyValue<NVS_KEY_DBGTMO, uint32_t, NvsConfigManager> debugTimeout_ms;
 
     // Mesh status LED colors (packed as 0x00RRGGBB)
     static PropertyValue<NVS_KEY_CLR_INIT, uint32_t, NvsConfigManager> colorInit;

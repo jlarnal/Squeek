@@ -53,7 +53,6 @@
 #define NVS_DEFAULT_ELECT_W_ADJACENCY   5.0f
 #define NVS_DEFAULT_ELECT_W_TENURE      8.0f
 #define NVS_DEFAULT_ELECT_W_LOWBAT_PEN  0.1f
-#define NVS_DEFAULT_DEBUG_TIMEOUT_MS    15000
 #define NVS_DEFAULT_CLR_INIT            0x00140600   // orange (20,6,0)
 #define NVS_DEFAULT_CLR_READY           0x00140F00   // yellow  (20,15,0)
 #define NVS_DEFAULT_CLR_GATEWAY         0x00000800   // dim green      (0,255,0)
