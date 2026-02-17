@@ -9,7 +9,7 @@
 
 
 #ifdef DEBUG_MENU_ENABLED
-#include "debug_menu.h"
+#include "debug_cli.h"
 #endif
 
 void setup()
@@ -24,7 +24,7 @@ void setup()
     LedDriver::rgbBlink(RgbColor(NvsConfigManager::colorInit), 1000, 1000); // dim slow orange flash
 
 #ifdef DEBUG_MENU_ENABLED
-    debug_menu();
+    debug_cli_init();
 #endif
 
     PowerManager::init();
@@ -44,8 +44,6 @@ void loop()
     } else {
         LedDriver::rgbBlink(RgbColor(NvsConfigManager::colorDisconnected),500,1000); // red = disconnected
     }
-   
-    Serial.printf("Battery: %lu mV\n", PowerManager::batteryMv());
 
     RtcMap::save();
 
