@@ -6,7 +6,7 @@ idf_component_register(SRCS
     "mesh_conductor.cpp"
     "mesh_gateway.cpp"
     "mesh_node.cpp"
-    "debug_menu.cpp"
+    "debug_cli.cpp"
     "nvs_config.cpp"
     "peer_table.cpp"
     "ftm_manager.cpp"
