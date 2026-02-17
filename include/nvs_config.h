@@ -2,6 +2,7 @@
 #define NVS_CONFIG_H
 
 #include "property_value.h"
+#include "bsp.hpp"
 
 // NVS keys
 inline constexpr char NVS_KEY_SHASH[]  = "sHash";
@@ -11,15 +12,25 @@ inline constexpr char NVS_KEY_EW_ADJ[] = "ewAdj";
 inline constexpr char NVS_KEY_EW_TEN[] = "ewTen";
 inline constexpr char NVS_KEY_EW_LBP[] = "ewLbp";
 inline constexpr char NVS_KEY_DBGTMO[] = "dbgTmo";
+inline constexpr char NVS_KEY_CLR_INIT[] = "clrInit";
+inline constexpr char NVS_KEY_CLR_RDY[]  = "clrRdy";
+inline constexpr char NVS_KEY_CLR_GW[]   = "clrGw";
+inline constexpr char NVS_KEY_CLR_PEER[] = "clrPeer";
+inline constexpr char NVS_KEY_CLR_DISC[] = "clrDisc";
 
-// --- Default values (extend this list as members grow) ---
+// --- Default values (sourced from BSP defines for single-point maintenance) ---
 
-inline constexpr bool  DEFAULT_LEDS_ENABLED       = true;
-inline constexpr float DEFAULT_ELECT_W_BATTERY     = 1.0f;
-inline constexpr float DEFAULT_ELECT_W_ADJACENCY   = 5.0f;
-inline constexpr float DEFAULT_ELECT_W_TENURE      = 8.0f;
-inline constexpr float DEFAULT_ELECT_W_LOWBAT_PEN  = 0.1f;
-inline constexpr uint32_t DEFAULT_DEBUG_TIMEOUT_MS  = 15000;
+inline constexpr bool     DEFAULT_LEDS_ENABLED       = NVS_DEFAULT_LEDS_ENABLED;
+inline constexpr float    DEFAULT_ELECT_W_BATTERY    = NVS_DEFAULT_ELECT_W_BATTERY;
+inline constexpr float    DEFAULT_ELECT_W_ADJACENCY  = NVS_DEFAULT_ELECT_W_ADJACENCY;
+inline constexpr float    DEFAULT_ELECT_W_TENURE     = NVS_DEFAULT_ELECT_W_TENURE;
+inline constexpr float    DEFAULT_ELECT_W_LOWBAT_PEN = NVS_DEFAULT_ELECT_W_LOWBAT_PEN;
+inline constexpr uint32_t DEFAULT_DEBUG_TIMEOUT_MS   = NVS_DEFAULT_DEBUG_TIMEOUT_MS;
+inline constexpr uint32_t DEFAULT_CLR_INIT           = NVS_DEFAULT_CLR_INIT;
+inline constexpr uint32_t DEFAULT_CLR_READY          = NVS_DEFAULT_CLR_READY;
+inline constexpr uint32_t DEFAULT_CLR_GATEWAY        = NVS_DEFAULT_CLR_GATEWAY;
+inline constexpr uint32_t DEFAULT_CLR_PEER           = NVS_DEFAULT_CLR_PEER;
+inline constexpr uint32_t DEFAULT_CLR_DISCONNECTED   = NVS_DEFAULT_CLR_DISCONNECTED;
 
 // --- Compile-time settings hash (FNV-1a) ---
 //     Changes automatically when any default value above is modified.
@@ -63,6 +74,11 @@ namespace detail {
         h = fnvFloat(h, DEFAULT_ELECT_W_TENURE);
         h = fnvFloat(h, DEFAULT_ELECT_W_LOWBAT_PEN);
         h = fnvU32(h,  DEFAULT_DEBUG_TIMEOUT_MS);
+        h = fnvU32(h, DEFAULT_CLR_INIT);
+        h = fnvU32(h, DEFAULT_CLR_READY);
+        h = fnvU32(h, DEFAULT_CLR_GATEWAY);
+        h = fnvU32(h, DEFAULT_CLR_PEER);
+        h = fnvU32(h, DEFAULT_CLR_DISCONNECTED);
         return h;
     }
 }
@@ -98,6 +114,13 @@ public:
 
     /// Debug menu marquee timeout in ms (0 = infinite).
     static PropertyValue<NVS_KEY_DBGTMO, uint32_t, NvsConfigManager> debugTimeout_ms;
+
+    // Mesh status LED colors (packed as 0x00RRGGBB)
+    static PropertyValue<NVS_KEY_CLR_INIT, uint32_t, NvsConfigManager> colorInit;
+    static PropertyValue<NVS_KEY_CLR_RDY,  uint32_t, NvsConfigManager> colorReady;
+    static PropertyValue<NVS_KEY_CLR_GW,   uint32_t, NvsConfigManager> colorGateway;
+    static PropertyValue<NVS_KEY_CLR_PEER, uint32_t, NvsConfigManager> colorPeer;
+    static PropertyValue<NVS_KEY_CLR_DISC, uint32_t, NvsConfigManager> colorDisconnected;
 };
 
 #endif // NVS_CONFIG_H

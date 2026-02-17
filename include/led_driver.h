@@ -5,19 +5,35 @@
 
 struct HsvColor;
 
-struct __attribute__((packed)) RgbColor {
-    uint8_t r;
-    uint8_t g;
-    uint8_t b;
+// Packed as 0x00RRGGBB (little-endian uint32_t)
+struct RgbColor {
+    union {
+        uint32_t value;
+        struct { uint8_t b, g, r, _a; };
+    };
 
+    constexpr RgbColor() : value(0) {}
+    constexpr RgbColor(uint32_t packed) : value(packed) {}
+    constexpr RgbColor(uint8_t r_, uint8_t g_, uint8_t b_)
+        : b(b_), g(g_), r(r_), _a(0) {}
+
+    constexpr operator uint32_t() const { return value; }
     HsvColor toHsv() const;
 };
 
-struct __attribute__((packed)) HsvColor {
-    uint16_t h; // 0-360
-    uint8_t s; // 0-100
-    uint8_t v; // 0-100
+// Packed as 0xHHHHSSVV (h=16-bit 0-360, s=8-bit 0-100, v=8-bit 0-100)
+struct HsvColor {
+    union {
+        uint32_t value;
+        struct { uint8_t v, s; uint16_t h; };
+    };
 
+    constexpr HsvColor() : value(0) {}
+    constexpr HsvColor(uint32_t packed) : value(packed) {}
+    constexpr HsvColor(uint16_t h_, uint8_t s_, uint8_t v_)
+        : v(v_), s(s_), h(h_) {}
+
+    constexpr operator uint32_t() const { return value; }
     RgbColor toRgb() const;
 };
 
@@ -38,7 +54,7 @@ class LedDriver {
     static void statusBlink(bool enable, bool leaveOn);
     static void rgbSet(RgbColor color);
     static void rgbSet(const HsvColor& color) { rgbSet(color.toRgb()); }
-    static void rgbSet(uint8_t r, uint8_t g, uint8_t b) { rgbSet(RgbColor { r, g, b }); }
+    static void rgbSet(uint8_t r, uint8_t g, uint8_t b) { rgbSet(RgbColor(r, g, b)); }
     /**
      * @brief  Blink the RGB LED with the specified color, period, and duty cycle.
      *         Calling this method enables blinking immediately.
@@ -63,6 +79,22 @@ class LedDriver {
     {
         rgbBlink(false, false);
     }
+
+    /// Opaque snapshot of the full LED driver state.
+    struct State {
+        friend class LedDriver;
+      private:
+        RgbColor _rgb;
+        uint16_t _rgbPeriod;
+        uint16_t _rgbDuty;
+        uint16_t _statPeriod;
+        uint16_t _statDuty;
+        bool     _rgbBlink;
+        bool     _statBlink;
+    };
+
+    static State saveState();
+    static void  restoreState(const State& s);
 };
 
 #endif // LED_DRIVER_H

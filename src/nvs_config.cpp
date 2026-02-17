@@ -20,6 +20,11 @@ PropertyValue<NVS_KEY_EW_ADJ, float, NvsConfigManager>    NvsConfigManager::elec
 PropertyValue<NVS_KEY_EW_TEN, float, NvsConfigManager>    NvsConfigManager::electWTenure(DEFAULT_ELECT_W_TENURE);
 PropertyValue<NVS_KEY_EW_LBP, float, NvsConfigManager>    NvsConfigManager::electWLowbatPenalty(DEFAULT_ELECT_W_LOWBAT_PEN);
 PropertyValue<NVS_KEY_DBGTMO, uint32_t, NvsConfigManager> NvsConfigManager::debugTimeout_ms(DEFAULT_DEBUG_TIMEOUT_MS);
+PropertyValue<NVS_KEY_CLR_INIT, uint32_t, NvsConfigManager> NvsConfigManager::colorInit(DEFAULT_CLR_INIT);
+PropertyValue<NVS_KEY_CLR_RDY,  uint32_t, NvsConfigManager> NvsConfigManager::colorReady(DEFAULT_CLR_READY);
+PropertyValue<NVS_KEY_CLR_GW,   uint32_t, NvsConfigManager> NvsConfigManager::colorGateway(DEFAULT_CLR_GATEWAY);
+PropertyValue<NVS_KEY_CLR_PEER, uint32_t, NvsConfigManager> NvsConfigManager::colorPeer(DEFAULT_CLR_PEER);
+PropertyValue<NVS_KEY_CLR_DISC, uint32_t, NvsConfigManager> NvsConfigManager::colorDisconnected(DEFAULT_CLR_DISCONNECTED);
 
 // NVS read helpers
 
@@ -112,6 +117,11 @@ void NvsConfigManager::reloadFromNvs()
     electWTenure.loadInitial(nvsGetFloat(NVS_KEY_EW_TEN, DEFAULT_ELECT_W_TENURE));
     electWLowbatPenalty.loadInitial(nvsGetFloat(NVS_KEY_EW_LBP, DEFAULT_ELECT_W_LOWBAT_PEN));
     debugTimeout_ms.loadInitial(nvsGetU32(NVS_KEY_DBGTMO, DEFAULT_DEBUG_TIMEOUT_MS));
+    colorInit.loadInitial(nvsGetU32(NVS_KEY_CLR_INIT, DEFAULT_CLR_INIT));
+    colorReady.loadInitial(nvsGetU32(NVS_KEY_CLR_RDY, DEFAULT_CLR_READY));
+    colorGateway.loadInitial(nvsGetU32(NVS_KEY_CLR_GW, DEFAULT_CLR_GATEWAY));
+    colorPeer.loadInitial(nvsGetU32(NVS_KEY_CLR_PEER, DEFAULT_CLR_PEER));
+    colorDisconnected.loadInitial(nvsGetU32(NVS_KEY_CLR_DISC, DEFAULT_CLR_DISCONNECTED));
 
     ESP_LOGI(TAG, "Config loaded from NVS");
 }
@@ -130,6 +140,11 @@ bool NvsConfigManager::restoreFactoryDefault(uint32_t safeKey)
     electWTenure        = DEFAULT_ELECT_W_TENURE;
     electWLowbatPenalty  = DEFAULT_ELECT_W_LOWBAT_PEN;
     debugTimeout_ms      = DEFAULT_DEBUG_TIMEOUT_MS;
+    colorInit          = DEFAULT_CLR_INIT;
+    colorReady         = DEFAULT_CLR_READY;
+    colorGateway       = DEFAULT_CLR_GATEWAY;
+    colorPeer          = DEFAULT_CLR_PEER;
+    colorDisconnected  = DEFAULT_CLR_DISCONNECTED;
 
     return true;
 }

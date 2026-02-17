@@ -11,7 +11,7 @@ static TaskHandle_t blinkTaskHandle  = nullptr;
 static volatile bool rgbBlinkEnabled = false;
 static uint16_t rgbPeriod_ms         = 1000;
 static uint16_t rgbDuty_ptt          = 5000;
-static RgbColor rgbColor             = { 20, 8, 0 };
+static RgbColor rgbColor             = RgbColor(20, 8, 0);
 
 static volatile bool statusBlinkEnabled = false;
 static uint16_t statusPeriod_ms         = 1000;
@@ -225,6 +225,33 @@ void LedDriver::rgbBlink(bool enable, bool leaveOn)
         rgb_led.setPixelColor(0, 0);
         rgb_led.show();
     }
+}
+
+// --- State snapshot / restore ---
+
+LedDriver::State LedDriver::saveState()
+{
+    State s;
+    s._rgb        = rgbColor;
+    s._rgbPeriod  = rgbPeriod_ms;
+    s._rgbDuty    = rgbDuty_ptt;
+    s._rgbBlink   = rgbBlinkEnabled;
+    s._statPeriod = statusPeriod_ms;
+    s._statDuty   = statusDuty_ptt;
+    s._statBlink  = statusBlinkEnabled;
+    return s;
+}
+
+void LedDriver::restoreState(const State& s)
+{
+    if (s._rgbBlink)
+        rgbBlink(s._rgb, s._rgbPeriod, s._rgbDuty);
+    else
+        rgbSet(s._rgb);
+    if (s._statBlink)
+        statusBlink(s._statPeriod, s._statDuty);
+    else
+        statusBlink(false, false);
 }
 
 // --- Blink task (round-robin) ---

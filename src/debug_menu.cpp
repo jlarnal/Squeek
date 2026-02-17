@@ -6,6 +6,7 @@
 #include "mesh_conductor.h"
 #include "rtc_mesh_map.h"
 #include <Arduino.h>
+#include <esp_system.h>
 #include <WiFi.h>
 
 static const char* BANNER = "  Squeek v" SQUEEK_VERSION "  Press ENTER for debug menu, any other key to skip...  ";
@@ -86,8 +87,9 @@ static bool marquee_animation()
 
 static void menu_led_test()
 {
+    auto saved = LedDriver::saveState();
+
     Serial.println("LED test: status LED blink...");
-    LedDriver::init();
     LedDriver::statusFlash(200, 200, 3);
 
     Serial.println("RGB: Red...");
@@ -102,7 +104,7 @@ static void menu_led_test()
     LedDriver::rgbSet(0, 0, 255);
     delay(500);
 
-    LedDriver::rgbOff();
+    LedDriver::restoreState(saved);
     Serial.println("LED test done.");
 }
 
@@ -158,6 +160,9 @@ static void menu_mesh_join()
     }
     MeshConductor::printStatus();
     RtcMap::print();
+
+    // Stop mesh so background scanning doesn't spam the debug menu
+    MeshConductor::stop();
 }
 
 static void menu_gateway_elect()
@@ -221,6 +226,7 @@ static void menu_light_sleep()
                 break;
             input += c;
         }
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 
     uint32_t secs = 5;
@@ -241,7 +247,7 @@ static void menu_debug_timeout()
 {
     Serial.printf("Current debug timeout: %lu ms (0 = infinite)\n",
                   (unsigned long)(uint32_t)NvsConfigManager::debugTimeout_ms);
-    Serial.print("Enter new value in ms (0-60000): ");
+    Serial.print("Enter new value in ms (750-60000): ");
 
     unsigned long start = millis();
     String input        = "";
@@ -252,6 +258,7 @@ static void menu_debug_timeout()
                 break;
             input += c;
         }
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 
     if (input.length() == 0) {
@@ -260,14 +267,13 @@ static void menu_debug_timeout()
     }
 
     long val = input.toInt();
-    if (val < 0 || val > 60000) {
-        Serial.printf("\nOut of range: %ld (must be 0-60000)\n", val);
+    if (val < 750 || val > 60000) {
+        Serial.printf("\nOut of range: %ld (must be 750-60000)\n", val);
         return;
     }
 
     NvsConfigManager::debugTimeout_ms = (uint32_t)val;
-    Serial.printf("\nDebug timeout set to %lu ms%s\n",
-                  (unsigned long)val, val == 0 ? " (infinite)" : "");
+    Serial.printf("\nDebug timeout set to %lu ms\n",val);
 }
 
 void debug_menu()
@@ -336,5 +342,7 @@ void debug_menu()
         }
     }
 
-    Serial.println("Exiting debug menu, normal boot...");
+    Serial.println("Rebooting for clean start...");
+    Serial.flush();
+    esp_restart();
 }

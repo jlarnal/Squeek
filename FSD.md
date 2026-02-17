@@ -430,6 +430,12 @@ All major subsystem classes use the **static class** pattern: deleted constructo
 | `electWAdjacency` | `float` | `"ewAdj"` | `5.0` | public | Election weight per visible peer |
 | `electWTenure` | `float` | `"ewTen"` | `8.0` | public | Election penalty per past gateway term |
 | `electWLowbatPenalty` | `float` | `"ewLbp"` | `0.1` | public | Score multiplier when below `ELECT_BATTERY_FLOOR_MV` |
+| `debugTimeout_ms` | `uint32_t` | `"dbgTmo"` | `15000` | public | Debug menu marquee timeout in ms (0 = infinite) |
+| `clrInit` | `uint32_t` | `"clrInit"` | `0x00140800` | public | Boot-blink LED color (dim orange) |
+| `clrReady` | `uint32_t` | `"clrRdy"` | `0x00001400` | public | Init-done LED color (dim green) |
+| `clrGateway` | `uint32_t` | `"clrGw"` | `0x000000FF` | public | Gateway heartbeat LED color (blue) |
+| `clrPeer` | `uint32_t` | `"clrPeer"` | `0x0000FF00` | public | Connected peer heartbeat LED color (green) |
+| `clrDisconnected` | `uint32_t` | `"clrDisc"` | `0x00FF0000` | public | Disconnected heartbeat LED color (red) |
 
 **Supported `PropertyValue` types:** `bool`, `uint16_t`, `uint32_t`, `uint64_t`, `float` (stored as bit-cast `uint32_t` in NVS).
 
@@ -456,6 +462,137 @@ if battery_mv < ELECT_BATTERY_FLOOR_MV:
 - **MAC tiebreak** is the last 2 bytes of the MAC divided by 65536, ensuring a deterministic winner on exact ties without influencing real factors.
 
 The score is broadcast as a `double` in the `ElectionScore` packed struct over the mesh. The highest score wins; exact ties fall back to full MAC comparison.
+
+### 7.2.1 Mesh Timing Scenarios
+
+Sequence diagrams for the routerless mesh lifecycle. The `NO_PARENT_FOUND` handler uses a non-blocking FreeRTOS timer (MAC-derived jitter, 0–2000 ms) instead of `vTaskDelay`, so the event loop stays responsive and scanning continues while the promote timer is pending.
+
+Key constants (from `bsp.hpp`): internal scan window ~18 s (60 cycles), `ELECT_SETTLE_MS` = 3 s, `ELECT_TIMEOUT_MS` = 15 s, `MESH_REELECT_SLEEP_MS` = 5 s.
+
+#### Scenario 1 — Single Node Boot
+
+```mermaid
+sequenceDiagram
+    participant N as Node
+    participant T as Timers
+
+    N->>N: MeshConductor::start()
+    Note over N: MESH_EVENT_STARTED
+    Note over N: ESP-IDF internal scans (~18 s, 60 cycles)
+    Note over N: MESH_EVENT_NO_PARENT_FOUND
+    N->>T: start promote timer (MAC jitter, 0–2000 ms)
+    T-->>N: promoteTimerCb()
+    N->>N: esp_mesh_set_type(MESH_ROOT)
+    N->>N: esp_mesh_set_self_organized(true, false)
+    N->>N: s_connected = true
+    N->>T: start elect timer (ELECT_SETTLE_MS = 3 s)
+    T-->>N: runElection()
+    Note over N: totalNodes == 1 → self-elect Gateway
+    N->>N: assignRole(own_mac) → Gateway
+```
+
+#### Scenario 2 — Simultaneous Two-Node Boot
+
+```mermaid
+sequenceDiagram
+    participant A as Node A (low jitter)
+    participant B as Node B (high jitter)
+    participant T as Timers
+
+    Note over A,B: Both call start() at roughly the same time
+    Note over A: STARTED → scans (~18 s)
+    Note over B: STARTED → scans (~18 s)
+    Note over A: NO_PARENT_FOUND
+    Note over B: NO_PARENT_FOUND
+    A->>T: start promote (e.g. 580 ms)
+    B->>T: start promote (e.g. 1584 ms)
+    Note over A,B: ESP-IDF continues scanning on both nodes
+    T-->>A: promoteTimerCb() — fires first
+    A->>A: set_type(ROOT) + set_self_organized(true, false)
+    A->>A: s_connected = true
+    A->>T: start elect (3 s)
+    Note over A: SoftAP now visible
+    Note over B: Ongoing scan discovers A's SoftAP
+    Note over B: MESH_EVENT_PARENT_CONNECTED
+    B->>T: xTimerStop(promote) — cancelled
+    B->>B: s_connected = true
+    B->>T: start elect (3 s)
+    T-->>A: runElection()
+    T-->>B: runElection()
+    Note over A,B: Scores exchanged → highest score wins Gateway
+```
+
+#### Scenario 3 — Late Joiner (mesh already running)
+
+```mermaid
+sequenceDiagram
+    participant R as Root / Gateway
+    participant N as New Node
+    participant T as Timers
+
+    Note over R: Mesh established, Gateway role active
+    N->>N: MeshConductor::start()
+    Note over N: STARTED → scans
+    Note over N: Finds Root's SoftAP within first scan cycles
+    Note over N: MESH_EVENT_PARENT_CONNECTED
+    N->>N: s_connected = true
+    N->>T: start elect (3 s)
+    Note over R: MESH_EVENT_CHILD_CONNECTED
+    T-->>N: runElection()
+    Note over R,N: Scores exchanged → roles (re)assigned
+```
+
+#### Scenario 4 — Gateway Loss + Re-election
+
+```mermaid
+sequenceDiagram
+    participant G as Gateway (Root)
+    participant S as Survivor Node
+    participant T as Timers
+
+    Note over G,S: Mesh running normally
+    G-xS: Gateway dies (power loss / deep sleep)
+    Note over S: MESH_EVENT_PARENT_DISCONNECTED
+    S->>S: s_connected = false, onGatewayLost()
+    Note over S: ESP-IDF scans for new parent (~18 s)
+    Note over S: MESH_EVENT_NO_PARENT_FOUND
+    S->>T: start promote (MAC jitter, 0–2000 ms)
+    T-->>S: promoteTimerCb()
+    S->>S: set_type(ROOT) + set_self_organized(true, false)
+    S->>S: s_connected = true
+    S->>T: start elect (3 s)
+    T-->>S: runElection()
+    Note over S: totalNodes == 1 → self-elect Gateway
+    S->>S: assignRole → Gateway
+```
+
+> With multiple survivors, the jitter race applies identically to Scenario 2 — lowest-jitter node promotes first, others discover it and cancel their own promotion.
+
+#### Scenario 5 — Debug Menu (Option 4: Mesh Join)
+
+```mermaid
+sequenceDiagram
+    participant U as User (Serial)
+    participant N as Node
+    participant T as Timers
+
+    U->>N: Select option 4
+    N->>N: MeshConductor::init() + start()
+    Note over N: STARTED → scans (~18 s)
+    Note over N: NO_PARENT_FOUND
+    N->>T: start promote (jitter ms)
+    T-->>N: promoteTimerCb()
+    N->>N: ROOT + s_connected = true
+    N->>T: start elect (3 s)
+    T-->>N: runElection() → self-elect Gateway
+    Note over N: Mesh running, Gateway active
+    Note over U,N: 30 s debug timeout expires
+    N->>N: MeshConductor::stop()
+    N->>T: xTimerStop(promote)
+    N->>T: xTimerStop(elect)
+    N->>N: esp_mesh_stop()
+    N->>U: Return to debug menu (no lingering timers)
+```
 
 ### 7.3 LedDriver
 

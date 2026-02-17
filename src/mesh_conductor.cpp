@@ -28,9 +28,16 @@ static MeshNode    s_meshNode;
 // Election state
 static uint8_t     s_parentRetries  = 0;
 static TimerHandle_t s_electTimer   = nullptr;
+static TimerHandle_t s_settleTimer  = nullptr;
+static TimerHandle_t s_promoteTimer = nullptr;
+static TaskHandle_t  s_electTaskHandle = nullptr;
 static ElectionScore s_scores[MESH_MAX_NODES];
 static uint8_t     s_scoreCount     = 0;
 static uint16_t    s_gwTenure       = 0;        // cached from NVS
+
+// Task-notification bits for the election task
+static constexpr uint32_t ELECT_NOTIFY_RUN     = (1u << 0);
+static constexpr uint32_t ELECT_NOTIFY_TIMEOUT = (1u << 1);
 
 // --- NVS tenure helpers ---
 
@@ -131,19 +138,27 @@ static void assignRole(const uint8_t* winnerMac) {
     uint8_t own_mac[6];
     esp_read_mac(own_mac, ESP_MAC_WIFI_STA);
 
+    IMeshRole* newRole;
     if (memcmp(own_mac, winnerMac, 6) == 0) {
-        // We are the winner — become Gateway
         s_gwTenure++;
         nvsWriteTenure();
-        s_role = &s_gateway;
+        newRole = &s_gateway;
         Serial.println("[mesh] Role assigned: GATEWAY");
     } else {
-        s_role = &s_meshNode;
+        newRole = &s_meshNode;
         Serial.printf("[mesh] Role assigned: NODE (gateway=%02X:%02X:%02X:%02X:%02X:%02X)\n",
             winnerMac[0], winnerMac[1], winnerMac[2],
             winnerMac[3], winnerMac[4], winnerMac[5]);
     }
+
+    // Skip transition if already in the correct role
+    if (s_role == newRole) {
+        s_electionDone = true;
+        return;
+    }
+    if (s_role) s_role->end();
     s_electionDone = true;
+    s_role = newRole;
     s_role->begin();
 }
 
@@ -169,6 +184,21 @@ static void electionTimerCallback(TimerHandle_t xTimer) {
     (void)xTimer;
 
     if (s_electionDone) return;
+
+    // Non-root that timed out without collecting all scores → accept peer role
+    if (!esp_mesh_is_root()) {
+        int totalNodes = esp_mesh_get_total_node_num();
+        if ((int)s_scoreCount < totalNodes) {
+            Serial.println("[mesh] Election timeout (non-root) — accepting peer role");
+            if (s_role != &s_meshNode) {
+                if (s_role) s_role->end();
+                s_role = &s_meshNode;
+                s_role->begin();
+            }
+            s_electionDone = true;
+            return;
+        }
+    }
 
     // Add own score if not already present
     bool selfPresent = false;
@@ -272,12 +302,9 @@ void MeshConductor::runElection() {
         esp_mesh_send(NULL, &data, MESH_DATA_TODS, NULL, 0);
     }
 
-    // Start election timeout timer
-    if (s_electTimer == nullptr) {
-        s_electTimer = xTimerCreate("elect", pdMS_TO_TICKS(ELECT_TIMEOUT_MS),
-                                     pdFALSE, nullptr, electionTimerCallback);
-    }
-    xTimerStart(s_electTimer, 0);
+    // Stop settle timer (election is now active) and start election timeout
+    if (s_settleTimer) xTimerStop(s_settleTimer, 0);
+    xTimerChangePeriod(s_electTimer, pdMS_TO_TICKS(ELECT_TIMEOUT_MS), 0);
 }
 
 // --- Mesh data receive task ---
@@ -355,6 +382,49 @@ static void meshRxTask(void* pvParameters) {
     vTaskDelete(nullptr);
 }
 
+// --- Election task: runs heavy election logic with a proper stack ---
+
+static void electTask(void* pvParameters) {
+    (void)pvParameters;
+    uint32_t bits;
+    for (;;) {
+        if (xTaskNotifyWait(0, UINT32_MAX, &bits, portMAX_DELAY) == pdTRUE) {
+            if (bits & ELECT_NOTIFY_RUN)
+                MeshConductor::runElection();
+            if (bits & ELECT_NOTIFY_TIMEOUT)
+                electionTimerCallback(nullptr);
+        }
+    }
+}
+
+// --- Settle timer: debounced election trigger ---
+
+static void startSettleTimer() {
+    if (s_electTimer) xTimerStop(s_electTimer, 0);
+    xTimerChangePeriod(s_settleTimer, pdMS_TO_TICKS(ELECT_SETTLE_MS), 0);
+}
+
+// --- Promote timer callback (routerless root self-connect) ---
+
+static void promoteTimerCb(TimerHandle_t t) {
+    (void)t;
+    if (s_connected || esp_mesh_is_root()) return;
+
+    Serial.println("[mesh] Self-promoting to root (no existing mesh)");
+    esp_mesh_set_type(MESH_ROOT);
+    esp_mesh_set_self_organized(true, false);  // re-enable so children can join
+
+    // Routerless root has no upstream parent, so PARENT_CONNECTED won't fire.
+    // Manually mark connected and kick off the election.
+    s_connected = true;
+    s_parentRetries = 0;
+    updateRtcMap();
+
+    if (!s_electionDone) {
+        startSettleTimer();
+    }
+}
+
 // --- Event handler ---
 
 static void meshEventHandler(void* arg, esp_event_base_t event_base,
@@ -375,6 +445,7 @@ static void meshEventHandler(void* arg, esp_event_base_t event_base,
         break;
 
     case MESH_EVENT_PARENT_CONNECTED: {
+        if (s_promoteTimer) xTimerStop(s_promoteTimer, 0);
         Serial.println("[mesh] Parent connected");
         s_connected = true;
         s_parentRetries = 0;
@@ -385,16 +456,7 @@ static void meshEventHandler(void* arg, esp_event_base_t event_base,
 
         // Start election after settle delay
         if (!s_electionDone) {
-            if (s_electTimer == nullptr) {
-                s_electTimer = xTimerCreate("elect", pdMS_TO_TICKS(ELECT_SETTLE_MS),
-                                             pdFALSE, nullptr, [](TimerHandle_t t) {
-                    (void)t;
-                    MeshConductor::runElection();
-                });
-            }
-            // Use settle delay for initial trigger, then election timeout takes over
-            xTimerChangePeriod(s_electTimer, pdMS_TO_TICKS(ELECT_SETTLE_MS), 0);
-            xTimerStart(s_electTimer, 0);
+            startSettleTimer();
         }
         break;
     }
@@ -415,6 +477,14 @@ static void meshEventHandler(void* arg, esp_event_base_t event_base,
             child->mac[3], child->mac[4], child->mac[5]);
         if (s_role) s_role->onPeerJoined(child->mac);
         updateRtcMap();
+
+        // Re-run election so the new child can participate
+        if (s_electionDone && esp_mesh_is_root()) {
+            Serial.println("[mesh] Child joined after election — re-electing");
+            s_electionDone = false;
+            s_scoreCount = 0;
+            startSettleTimer();
+        }
         break;
     }
 
@@ -446,16 +516,28 @@ static void meshEventHandler(void* arg, esp_event_base_t event_base,
 
     case MESH_EVENT_NO_PARENT_FOUND:
         s_parentRetries++;
-        Serial.printf("[mesh] No parent found (retry %u/%u)\n", s_parentRetries, MESH_MAX_RETRIES);
-        if (s_parentRetries < MESH_MAX_RETRIES) {
-            // Retry after delay
-            vTaskDelay(pdMS_TO_TICKS(MESH_RETRY_DELAY_MS));
-            esp_mesh_connect();
+        Serial.printf("[mesh] No parent found (attempt %u)\n", s_parentRetries);
+        if (!esp_mesh_is_root()) {
+            uint8_t mac[6];
+            esp_read_mac(mac, ESP_MAC_WIFI_STA);
+            uint16_t jitter = ((mac[4] << 8) | mac[5]) % 2000;
+            Serial.printf("[mesh] Scheduling root promotion in %u ms\n", jitter);
+            if (s_promoteTimer == nullptr) {
+                s_promoteTimer = xTimerCreate("promote",
+                    pdMS_TO_TICKS(jitter > 0 ? jitter : 1),
+                    pdFALSE, nullptr, promoteTimerCb);
+            } else {
+                xTimerChangePeriod(s_promoteTimer,
+                    pdMS_TO_TICKS(jitter > 0 ? jitter : 1), 0);
+            }
+            xTimerStart(s_promoteTimer, 0);
         } else {
-            Serial.println("[mesh] Max retries reached — sleep and reboot");
-            MeshConductor::stop();
-            SQ_LIGHT_SLEEP(MESH_REELECT_SLEEP_MS);
-            esp_restart();
+            if (s_parentRetries >= MESH_MAX_RETRIES) {
+                Serial.println("[mesh] Root with no children — rebooting");
+                MeshConductor::stop();
+                SQ_LIGHT_SLEEP(MESH_REELECT_SLEEP_MS);
+                esp_restart();
+            }
         }
         break;
 
@@ -472,6 +554,10 @@ static void meshEventHandler(void* arg, esp_event_base_t event_base,
 // --- MeshConductor public API ---
 
 void MeshConductor::init() {
+    static bool s_meshInited = false;
+    if (s_meshInited) return;
+    s_meshInited = true;
+
     // Initialize NVS
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -484,7 +570,10 @@ void MeshConductor::init() {
 
     // Initialize network interface
     ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    err = esp_event_loop_create_default();
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_ERROR_CHECK(err);
+    }
 
     esp_netif_create_default_wifi_mesh_netifs(NULL, NULL);
 
@@ -497,6 +586,7 @@ void MeshConductor::init() {
 
     // Initialize mesh
     ESP_ERROR_CHECK(esp_mesh_init());
+    ESP_ERROR_CHECK(esp_mesh_fix_root(true));   // disable RSSI-based root voting; Squeek election takes over
 
     ESP_ERROR_CHECK(esp_event_handler_register(MESH_EVENT, ESP_EVENT_ANY_ID,
                                                 &meshEventHandler, NULL));
@@ -507,7 +597,9 @@ void MeshConductor::start() {
     cfg.channel = MESH_CHANNEL;
     memcpy((uint8_t*)&cfg.mesh_id, s_meshId, 6);
 
-    // No external router — self-contained mesh
+    // Routerless mesh — fix_root(true) disables router-RSSI election,
+    // so router config can be zeroed.  If esp_mesh_set_config() still
+    // rejects an empty SSID even with fix_root, fall back to a placeholder.
     memset(&cfg.router, 0, sizeof(cfg.router));
 
     // Mesh AP settings (no password for Phase 1)
@@ -517,13 +609,43 @@ void MeshConductor::start() {
     // No encryption for Phase 1
     cfg.crypto_funcs = NULL;
 
-    ESP_ERROR_CHECK(esp_mesh_set_config(&cfg));
+    esp_err_t err = esp_mesh_set_config(&cfg);
+    if (err == ESP_ERR_MESH_ARGUMENT) {
+        // fix_root didn't relax the SSID check — use placeholder
+        const char* ph = "SQUEEK_MESH";
+        memcpy(cfg.router.ssid, ph, strlen(ph));
+        cfg.router.ssid_len = strlen(ph);
+        ESP_ERROR_CHECK(esp_mesh_set_config(&cfg));
+    }
 
-    // Configure mesh topology — NO fix_root, allow dynamic root changes
+    // Configure mesh topology
     ESP_ERROR_CHECK(esp_mesh_set_max_layer(MESH_MAX_LAYER));
     ESP_ERROR_CHECK(esp_mesh_set_self_organized(true, true));
-    ESP_ERROR_CHECK(esp_mesh_set_vote_percentage(0.8));
-    ESP_ERROR_CHECK(esp_mesh_allow_root_conflicts(false));
+
+    // Create election task (runs heavy election logic off the timer stack)
+    if (s_electTaskHandle == nullptr) {
+        xTaskCreateUniversal(electTask, "elect", 4096, nullptr,
+                             tskIDLE_PRIORITY + 1, &s_electTaskHandle, tskNO_AFFINITY);
+    }
+
+    // Create election timers — callbacks are lightweight trampolines that
+    // notify the election task (timer service stack is too small for election logic)
+    if (s_settleTimer == nullptr) {
+        s_settleTimer = xTimerCreate("settle", pdMS_TO_TICKS(ELECT_SETTLE_MS),
+                                      pdFALSE, nullptr, [](TimerHandle_t t) {
+            (void)t;
+            if (s_electTaskHandle)
+                xTaskNotify(s_electTaskHandle, ELECT_NOTIFY_RUN, eSetBits);
+        });
+    }
+    if (s_electTimer == nullptr) {
+        s_electTimer = xTimerCreate("electTO", pdMS_TO_TICKS(ELECT_TIMEOUT_MS),
+                                     pdFALSE, nullptr, [](TimerHandle_t t) {
+            (void)t;
+            if (s_electTaskHandle)
+                xTaskNotify(s_electTaskHandle, ELECT_NOTIFY_TIMEOUT, eSetBits);
+        });
+    }
 
     // Reset election state
     s_electionDone = false;
@@ -539,6 +661,12 @@ void MeshConductor::stop() {
     if (s_role) {
         s_role->end();
         s_role = nullptr;
+    }
+    if (s_settleTimer) {
+        xTimerStop(s_settleTimer, 0);
+    }
+    if (s_promoteTimer) {
+        xTimerStop(s_promoteTimer, 0);
     }
     if (s_electTimer) {
         xTimerStop(s_electTimer, 0);

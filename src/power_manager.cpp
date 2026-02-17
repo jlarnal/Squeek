@@ -12,6 +12,7 @@ static adc_cali_handle_t cali_handle = NULL;
 static bool cali_available = false;
 
 void PowerManager::init() {
+    if (adc_handle != NULL) return;   // already initialized
     // Configure ADC oneshot unit
     adc_oneshot_unit_init_cfg_t unit_cfg = {};
     unit_cfg.unit_id = ADC_UNIT_1;

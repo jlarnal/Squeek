@@ -35,9 +35,9 @@
 // ---------------------------------------------------------------------------
 #ifdef DEBUG_MENU_ENABLED
 
-#define SQ_LIGHT_SLEEP(ms)   delay(ms)
-#define SQ_DEEP_SLEEP(ms)    do { Serial.println("[DBG] deep-sleep suppressed"); delay(ms); } while(0)
-#define SQ_POWER_DELAY(ms)   delay(ms)
+#define SQ_LIGHT_SLEEP(ms)   vTaskDelay(pdMS_TO_TICKS(ms))
+#define SQ_DEEP_SLEEP(ms)    do { Serial.println("[DBG] deep-sleep suppressed"); vTaskDelay(pdMS_TO_TICKS(ms)); } while(0)
+#define SQ_POWER_DELAY(ms)   vTaskDelay(pdMS_TO_TICKS(ms))
 
 #else // release
 
@@ -47,7 +47,20 @@
 
 #endif // DEBUG_MENU_ENABLED
 
-// Mesh config
+// NvsConfigManager property defaults (override here to change factory values)
+#define NVS_DEFAULT_LEDS_ENABLED        true
+#define NVS_DEFAULT_ELECT_W_BATTERY     1.0f
+#define NVS_DEFAULT_ELECT_W_ADJACENCY   5.0f
+#define NVS_DEFAULT_ELECT_W_TENURE      8.0f
+#define NVS_DEFAULT_ELECT_W_LOWBAT_PEN  0.1f
+#define NVS_DEFAULT_DEBUG_TIMEOUT_MS    15000
+#define NVS_DEFAULT_CLR_INIT            0x00140600   // orange (20,6,0)
+#define NVS_DEFAULT_CLR_READY           0x00140F00   // yellow  (20,15,0)
+#define NVS_DEFAULT_CLR_GATEWAY         0x00000800   // dim green      (0,255,0)
+#define NVS_DEFAULT_CLR_PEER            0x00000008   // dim blue   (0,10,15)
+#define NVS_DEFAULT_CLR_DISCONNECTED    0x00200000   // dim red        (255,0,0)
+
+// Mesh config  
 #define MESH_MAX_NODES       16
 #define MESH_CHANNEL         1
 #define MESH_MAX_LAYER       4
