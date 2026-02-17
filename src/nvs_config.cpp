@@ -26,6 +26,20 @@ PropertyValue<NVS_KEY_CLR_GW,   uint32_t, NvsConfigManager> NvsConfigManager::co
 PropertyValue<NVS_KEY_CLR_PEER, uint32_t, NvsConfigManager> NvsConfigManager::colorPeer(DEFAULT_CLR_PEER);
 PropertyValue<NVS_KEY_CLR_DISC, uint32_t, NvsConfigManager> NvsConfigManager::colorDisconnected(DEFAULT_CLR_DISCONNECTED);
 
+// Phase 2: Heartbeat & re-election
+PropertyValue<NVS_KEY_HB_INT,   uint32_t, NvsConfigManager> NvsConfigManager::heartbeatInterval_s(DEFAULT_HB_INTERVAL_S);
+PropertyValue<NVS_KEY_HB_STALE, uint32_t, NvsConfigManager> NvsConfigManager::heartbeatStaleMultiplier(DEFAULT_HB_STALE_MULT);
+PropertyValue<NVS_KEY_REEL_DMV, uint32_t, NvsConfigManager> NvsConfigManager::reelectionBatteryDelta_mv(DEFAULT_REELECT_DELTA_MV);
+
+// Phase 2: FTM
+PropertyValue<NVS_KEY_FTM_STALE, uint32_t, NvsConfigManager> NvsConfigManager::ftmStaleness_s(DEFAULT_FTM_STALE_S);
+PropertyValue<NVS_KEY_FTM_ANCH,  uint32_t, NvsConfigManager> NvsConfigManager::ftmNewNodeAnchors(DEFAULT_FTM_NEW_ANCHORS);
+PropertyValue<NVS_KEY_FTM_SAMP,  uint32_t, NvsConfigManager> NvsConfigManager::ftmSamplesPerPair(DEFAULT_FTM_SAMPLES);
+PropertyValue<NVS_KEY_FTM_TMO,   uint32_t, NvsConfigManager> NvsConfigManager::ftmPairTimeout_ms(DEFAULT_FTM_PAIR_TMO_MS);
+PropertyValue<NVS_KEY_FTM_SWP,   uint32_t, NvsConfigManager> NvsConfigManager::ftmSweepInterval_s(DEFAULT_FTM_SWEEP_INT_S);
+PropertyValue<NVS_KEY_FTM_KPN,   float,    NvsConfigManager> NvsConfigManager::ftmKalmanProcessNoise(DEFAULT_FTM_KALMAN_PN);
+PropertyValue<NVS_KEY_FTM_OFS,   uint32_t, NvsConfigManager> NvsConfigManager::ftmResponderOffset_cm(DEFAULT_FTM_RESP_OFS_CM);
+
 // NVS read helpers
 
 static bool nvsGetBool(const char* key, bool defaultValue)
@@ -123,6 +137,18 @@ void NvsConfigManager::reloadFromNvs()
     colorPeer.loadInitial(nvsGetU32(NVS_KEY_CLR_PEER, DEFAULT_CLR_PEER));
     colorDisconnected.loadInitial(nvsGetU32(NVS_KEY_CLR_DISC, DEFAULT_CLR_DISCONNECTED));
 
+    // Phase 2
+    heartbeatInterval_s.loadInitial(nvsGetU32(NVS_KEY_HB_INT, DEFAULT_HB_INTERVAL_S));
+    heartbeatStaleMultiplier.loadInitial(nvsGetU32(NVS_KEY_HB_STALE, DEFAULT_HB_STALE_MULT));
+    reelectionBatteryDelta_mv.loadInitial(nvsGetU32(NVS_KEY_REEL_DMV, DEFAULT_REELECT_DELTA_MV));
+    ftmStaleness_s.loadInitial(nvsGetU32(NVS_KEY_FTM_STALE, DEFAULT_FTM_STALE_S));
+    ftmNewNodeAnchors.loadInitial(nvsGetU32(NVS_KEY_FTM_ANCH, DEFAULT_FTM_NEW_ANCHORS));
+    ftmSamplesPerPair.loadInitial(nvsGetU32(NVS_KEY_FTM_SAMP, DEFAULT_FTM_SAMPLES));
+    ftmPairTimeout_ms.loadInitial(nvsGetU32(NVS_KEY_FTM_TMO, DEFAULT_FTM_PAIR_TMO_MS));
+    ftmSweepInterval_s.loadInitial(nvsGetU32(NVS_KEY_FTM_SWP, DEFAULT_FTM_SWEEP_INT_S));
+    ftmKalmanProcessNoise.loadInitial(nvsGetFloat(NVS_KEY_FTM_KPN, DEFAULT_FTM_KALMAN_PN));
+    ftmResponderOffset_cm.loadInitial(nvsGetU32(NVS_KEY_FTM_OFS, DEFAULT_FTM_RESP_OFS_CM));
+
     ESP_LOGI(TAG, "Config loaded from NVS");
 }
 
@@ -145,6 +171,18 @@ bool NvsConfigManager::restoreFactoryDefault(uint32_t safeKey)
     colorGateway       = DEFAULT_CLR_GATEWAY;
     colorPeer          = DEFAULT_CLR_PEER;
     colorDisconnected  = DEFAULT_CLR_DISCONNECTED;
+
+    // Phase 2
+    heartbeatInterval_s       = (uint32_t)DEFAULT_HB_INTERVAL_S;
+    heartbeatStaleMultiplier  = (uint32_t)DEFAULT_HB_STALE_MULT;
+    reelectionBatteryDelta_mv = (uint32_t)DEFAULT_REELECT_DELTA_MV;
+    ftmStaleness_s            = (uint32_t)DEFAULT_FTM_STALE_S;
+    ftmNewNodeAnchors         = (uint32_t)DEFAULT_FTM_NEW_ANCHORS;
+    ftmSamplesPerPair         = (uint32_t)DEFAULT_FTM_SAMPLES;
+    ftmPairTimeout_ms         = (uint32_t)DEFAULT_FTM_PAIR_TMO_MS;
+    ftmSweepInterval_s        = (uint32_t)DEFAULT_FTM_SWEEP_INT_S;
+    ftmKalmanProcessNoise     = DEFAULT_FTM_KALMAN_PN;
+    ftmResponderOffset_cm     = (uint32_t)DEFAULT_FTM_RESP_OFS_CM;
 
     return true;
 }

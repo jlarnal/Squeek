@@ -1,4 +1,7 @@
 #include "mesh_conductor.h"
+#include "peer_table.h"
+#include "ftm_manager.h"
+#include "ftm_scheduler.h"
 #include "bsp.hpp"
 #include "rtc_mesh_map.h"
 #include "power_manager.h"
@@ -375,6 +378,51 @@ static void meshRxTask(void* pvParameters) {
             }
         }
 
+        // --- Phase 2 message dispatch ---
+
+        if (data.size >= 1) {
+            uint8_t msgType = rx_buf[0];
+
+            if (msgType == MSG_TYPE_HEARTBEAT && data.size >= sizeof(HeartbeatMsg)) {
+                HeartbeatMsg* hb = (HeartbeatMsg*)rx_buf;
+                if (s_role && s_role->isGateway()) {
+                    PeerTable::updateFromHeartbeat(hb->mac, hb->battery_mv,
+                                                    hb->flags, hb->softap_mac);
+                }
+            }
+            else if (msgType == MSG_TYPE_FTM_WAKE && data.size >= sizeof(FtmWakeMsg)) {
+                FtmWakeMsg* wake = (FtmWakeMsg*)rx_buf;
+                FtmManager::onFtmWake(wake->initiator, wake->responder, wake->responder_ap);
+            }
+            else if (msgType == MSG_TYPE_FTM_GO && data.size >= sizeof(FtmGoMsg)) {
+                FtmGoMsg* go = (FtmGoMsg*)rx_buf;
+                FtmManager::onFtmGo(go->target_ap, go->samples);
+            }
+            else if (msgType == MSG_TYPE_FTM_READY && data.size >= sizeof(FtmReadyMsg)) {
+                FtmReadyMsg* ready = (FtmReadyMsg*)rx_buf;
+                if (s_role && s_role->isGateway()) {
+                    FtmScheduler::onFtmReady(ready->mac);
+                }
+            }
+            else if (msgType == MSG_TYPE_FTM_RESULT && data.size >= sizeof(FtmResultMsg)) {
+                FtmResultMsg* result = (FtmResultMsg*)rx_buf;
+                if (s_role && s_role->isGateway()) {
+                    FtmScheduler::onFtmResult(result->initiator, result->responder,
+                                               result->distance_cm, result->status);
+                }
+            }
+            else if (msgType == MSG_TYPE_FTM_CANCEL) {
+                // Cancel any in-progress FTM session
+                Serial.println("[mesh] FTM_CANCEL received");
+            }
+            else if (msgType == MSG_TYPE_POS_UPDATE && data.size >= sizeof(PosUpdateMsg)) {
+                PosUpdateMsg* pos = (PosUpdateMsg*)rx_buf;
+                PosUpdateEntry* entries = (PosUpdateEntry*)(rx_buf + sizeof(PosUpdateMsg));
+                Serial.printf("[mesh] POS_UPDATE: %u nodes, %uD\n", pos->count, pos->dimension);
+                // Nodes could store their own position from this
+            }
+        }
+
         // Reset buffer for next receive
         data.size = sizeof(rx_buf);
     }
@@ -728,4 +776,51 @@ void MeshConductor::forceReelection() {
     stop();
     SQ_LIGHT_SLEEP(MESH_REELECT_SLEEP_MS);
     esp_restart();
+}
+
+// --- Messaging helpers ---
+
+esp_err_t MeshConductor::sendToRoot(const void* data, uint16_t len) {
+    mesh_data_t mdata;
+    mdata.data = (uint8_t*)data;
+    mdata.size = len;
+    mdata.proto = MESH_PROTO_BIN;
+    mdata.tos = MESH_TOS_P2P;
+    return esp_mesh_send(NULL, &mdata, MESH_DATA_TODS, NULL, 0);
+}
+
+esp_err_t MeshConductor::sendToNode(const uint8_t* sta_mac, const void* data, uint16_t len) {
+    mesh_data_t mdata;
+    mdata.data = (uint8_t*)data;
+    mdata.size = len;
+    mdata.proto = MESH_PROTO_BIN;
+    mdata.tos = MESH_TOS_P2P;
+
+    mesh_addr_t addr;
+    memcpy(addr.addr, sta_mac, 6);
+    return esp_mesh_send(&addr, &mdata, MESH_DATA_P2P, NULL, 0);
+}
+
+esp_err_t MeshConductor::broadcastToAll(const void* data, uint16_t len) {
+    // Send to all nodes in the routing table
+    mesh_addr_t routing_table[MESH_MAX_NODES];
+    int table_size = 0;
+    esp_mesh_get_routing_table(routing_table, MESH_MAX_NODES, &table_size);
+
+    uint8_t own_mac[6];
+    esp_read_mac(own_mac, ESP_MAC_WIFI_STA);
+
+    mesh_data_t mdata;
+    mdata.data = (uint8_t*)data;
+    mdata.size = len;
+    mdata.proto = MESH_PROTO_BIN;
+    mdata.tos = MESH_TOS_P2P;
+
+    esp_err_t last_err = ESP_OK;
+    for (int i = 0; i < table_size; i++) {
+        if (memcmp(routing_table[i].addr, own_mac, 6) == 0) continue;
+        esp_err_t err = esp_mesh_send(&routing_table[i], &mdata, MESH_DATA_P2P, NULL, 0);
+        if (err != ESP_OK) last_err = err;
+    }
+    return last_err;
 }

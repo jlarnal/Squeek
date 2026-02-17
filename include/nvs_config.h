@@ -18,6 +18,20 @@ inline constexpr char NVS_KEY_CLR_GW[]   = "clrGw";
 inline constexpr char NVS_KEY_CLR_PEER[] = "clrPeer";
 inline constexpr char NVS_KEY_CLR_DISC[] = "clrDisc";
 
+// Phase 2: Heartbeat & re-election
+inline constexpr char NVS_KEY_HB_INT[]    = "hbInt";
+inline constexpr char NVS_KEY_HB_STALE[]  = "hbStale";
+inline constexpr char NVS_KEY_REEL_DMV[]  = "reelDmv";
+
+// Phase 2: FTM
+inline constexpr char NVS_KEY_FTM_STALE[] = "ftmStale";
+inline constexpr char NVS_KEY_FTM_ANCH[]  = "ftmAnch";
+inline constexpr char NVS_KEY_FTM_SAMP[]  = "ftmSamp";
+inline constexpr char NVS_KEY_FTM_TMO[]   = "ftmTmo";
+inline constexpr char NVS_KEY_FTM_SWP[]   = "ftmSwp";
+inline constexpr char NVS_KEY_FTM_KPN[]   = "ftmKpn";
+inline constexpr char NVS_KEY_FTM_OFS[]   = "ftmOfs";
+
 // --- Default values (sourced from BSP defines for single-point maintenance) ---
 
 inline constexpr bool     DEFAULT_LEDS_ENABLED       = NVS_DEFAULT_LEDS_ENABLED;
@@ -31,6 +45,20 @@ inline constexpr uint32_t DEFAULT_CLR_READY          = NVS_DEFAULT_CLR_READY;
 inline constexpr uint32_t DEFAULT_CLR_GATEWAY        = NVS_DEFAULT_CLR_GATEWAY;
 inline constexpr uint32_t DEFAULT_CLR_PEER           = NVS_DEFAULT_CLR_PEER;
 inline constexpr uint32_t DEFAULT_CLR_DISCONNECTED   = NVS_DEFAULT_CLR_DISCONNECTED;
+
+// Phase 2: Heartbeat & re-election defaults
+inline constexpr uint32_t DEFAULT_HB_INTERVAL_S      = NVS_DEFAULT_HB_INTERVAL_S;
+inline constexpr uint8_t  DEFAULT_HB_STALE_MULT      = NVS_DEFAULT_HB_STALE_MULT;
+inline constexpr uint16_t DEFAULT_REELECT_DELTA_MV   = NVS_DEFAULT_REELECT_DELTA_MV;
+
+// Phase 2: FTM defaults
+inline constexpr uint32_t DEFAULT_FTM_STALE_S        = NVS_DEFAULT_FTM_STALE_S;
+inline constexpr uint8_t  DEFAULT_FTM_NEW_ANCHORS    = NVS_DEFAULT_FTM_NEW_ANCHORS;
+inline constexpr uint8_t  DEFAULT_FTM_SAMPLES        = NVS_DEFAULT_FTM_SAMPLES;
+inline constexpr uint32_t DEFAULT_FTM_PAIR_TMO_MS    = NVS_DEFAULT_FTM_PAIR_TMO_MS;
+inline constexpr uint32_t DEFAULT_FTM_SWEEP_INT_S    = NVS_DEFAULT_FTM_SWEEP_INT_S;
+inline constexpr float    DEFAULT_FTM_KALMAN_PN      = NVS_DEFAULT_FTM_KALMAN_PN;
+inline constexpr int16_t  DEFAULT_FTM_RESP_OFS_CM    = NVS_DEFAULT_FTM_RESP_OFS_CM;
 
 // --- Compile-time settings hash (FNV-1a) ---
 //     Changes automatically when any default value above is modified.
@@ -79,6 +107,17 @@ namespace detail {
         h = fnvU32(h, DEFAULT_CLR_GATEWAY);
         h = fnvU32(h, DEFAULT_CLR_PEER);
         h = fnvU32(h, DEFAULT_CLR_DISCONNECTED);
+        // Phase 2
+        h = fnvU32(h, DEFAULT_HB_INTERVAL_S);
+        h = fnvByte(h, DEFAULT_HB_STALE_MULT);
+        h = fnvU32(h, (uint32_t)DEFAULT_REELECT_DELTA_MV);
+        h = fnvU32(h, DEFAULT_FTM_STALE_S);
+        h = fnvByte(h, DEFAULT_FTM_NEW_ANCHORS);
+        h = fnvByte(h, DEFAULT_FTM_SAMPLES);
+        h = fnvU32(h, DEFAULT_FTM_PAIR_TMO_MS);
+        h = fnvU32(h, DEFAULT_FTM_SWEEP_INT_S);
+        h = fnvFloat(h, DEFAULT_FTM_KALMAN_PN);
+        h = fnvU32(h, (uint32_t)(uint16_t)DEFAULT_FTM_RESP_OFS_CM);
         return h;
     }
 }
@@ -121,6 +160,20 @@ public:
     static PropertyValue<NVS_KEY_CLR_GW,   uint32_t, NvsConfigManager> colorGateway;
     static PropertyValue<NVS_KEY_CLR_PEER, uint32_t, NvsConfigManager> colorPeer;
     static PropertyValue<NVS_KEY_CLR_DISC, uint32_t, NvsConfigManager> colorDisconnected;
+
+    // Phase 2: Heartbeat & re-election
+    static PropertyValue<NVS_KEY_HB_INT,   uint32_t, NvsConfigManager> heartbeatInterval_s;
+    static PropertyValue<NVS_KEY_HB_STALE, uint32_t, NvsConfigManager> heartbeatStaleMultiplier;
+    static PropertyValue<NVS_KEY_REEL_DMV, uint32_t, NvsConfigManager> reelectionBatteryDelta_mv;
+
+    // Phase 2: FTM
+    static PropertyValue<NVS_KEY_FTM_STALE, uint32_t, NvsConfigManager> ftmStaleness_s;
+    static PropertyValue<NVS_KEY_FTM_ANCH,  uint32_t, NvsConfigManager> ftmNewNodeAnchors;
+    static PropertyValue<NVS_KEY_FTM_SAMP,  uint32_t, NvsConfigManager> ftmSamplesPerPair;
+    static PropertyValue<NVS_KEY_FTM_TMO,   uint32_t, NvsConfigManager> ftmPairTimeout_ms;
+    static PropertyValue<NVS_KEY_FTM_SWP,   uint32_t, NvsConfigManager> ftmSweepInterval_s;
+    static PropertyValue<NVS_KEY_FTM_KPN,   float,    NvsConfigManager> ftmKalmanProcessNoise;
+    static PropertyValue<NVS_KEY_FTM_OFS,   uint32_t, NvsConfigManager> ftmResponderOffset_cm;
 };
 
 #endif // NVS_CONFIG_H

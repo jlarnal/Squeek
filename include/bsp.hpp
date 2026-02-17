@@ -60,6 +60,20 @@
 #define NVS_DEFAULT_CLR_PEER            0x00000008   // dim blue   (0,10,15)
 #define NVS_DEFAULT_CLR_DISCONNECTED    0x00200000   // dim red        (255,0,0)
 
+// Phase 2: Heartbeat
+#define NVS_DEFAULT_HB_INTERVAL_S      30
+#define NVS_DEFAULT_HB_STALE_MULT      3
+#define NVS_DEFAULT_REELECT_DELTA_MV   200
+
+// Phase 2: FTM
+#define NVS_DEFAULT_FTM_STALE_S        300
+#define NVS_DEFAULT_FTM_NEW_ANCHORS    5
+#define NVS_DEFAULT_FTM_SAMPLES        8
+#define NVS_DEFAULT_FTM_PAIR_TMO_MS    3000
+#define NVS_DEFAULT_FTM_SWEEP_INT_S    600
+#define NVS_DEFAULT_FTM_KALMAN_PN      0.01f
+#define NVS_DEFAULT_FTM_RESP_OFS_CM    0
+
 // Mesh config  
 #define MESH_MAX_NODES       16
 #define MESH_CHANNEL         1

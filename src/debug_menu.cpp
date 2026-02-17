@@ -5,6 +5,10 @@
 #include "power_manager.h"
 #include "mesh_conductor.h"
 #include "rtc_mesh_map.h"
+#include "peer_table.h"
+#include "ftm_manager.h"
+#include "ftm_scheduler.h"
+#include "position_solver.h"
 #include <Arduino.h>
 #include <esp_system.h>
 #include <WiFi.h>
@@ -276,6 +280,134 @@ static void menu_debug_timeout()
     Serial.printf("\nDebug timeout set to %lu ms\n",val);
 }
 
+static void menu_peer_table()
+{
+    if (!MeshConductor::isConnected()) {
+        Serial.println("Mesh not connected. Run [4] first.");
+        return;
+    }
+    if (!MeshConductor::isGateway()) {
+        Serial.println("Not gateway — PeerTable only runs on gateway.");
+        return;
+    }
+    PeerTable::print();
+}
+
+static void menu_ftm_single()
+{
+    if (!MeshConductor::isConnected()) {
+        Serial.println("Mesh not connected. Run [4] first.");
+        return;
+    }
+
+    Serial.println("FTM single-shot test");
+    Serial.println("Initializing FTM manager...");
+    FtmManager::init();
+
+    // Get a peer's SoftAP MAC from PeerTable (if gateway) or from routing table
+    if (MeshConductor::isGateway() && PeerTable::peerCount() >= 2) {
+        PeerEntry* peer = PeerTable::getEntryByIndex(1);
+        if (peer && !(peer->flags & PEER_STATUS_DEAD)) {
+            Serial.printf("Ranging to peer slot 1: %02X:%02X:%02X:%02X:%02X:%02X (SoftAP: %02X:%02X:%02X:%02X:%02X:%02X)\n",
+                peer->mac[0], peer->mac[1], peer->mac[2],
+                peer->mac[3], peer->mac[4], peer->mac[5],
+                peer->softap_mac[0], peer->softap_mac[1], peer->softap_mac[2],
+                peer->softap_mac[3], peer->softap_mac[4], peer->softap_mac[5]);
+
+            float dist = FtmManager::initiateSession(peer->softap_mac, MESH_CHANNEL, 8);
+            if (dist >= 0) {
+                Serial.printf("SUCCESS: distance = %.1f cm (%.2f m)\n", dist, dist / 100.0f);
+            } else {
+                Serial.println("FAILED: FTM session did not succeed");
+            }
+            return;
+        }
+    }
+
+    Serial.println("No peer available for FTM. Need at least 1 peer with known SoftAP MAC.");
+    Serial.println("(Peer must have sent a heartbeat so its SoftAP MAC is in PeerTable)");
+}
+
+static void menu_ftm_sweep()
+{
+    if (!MeshConductor::isGateway()) {
+        Serial.println("Not gateway — FTM sweep only runs on gateway.");
+        return;
+    }
+    if (PeerTable::peerCount() < 2) {
+        Serial.println("Need at least 2 nodes for sweep.");
+        return;
+    }
+
+    Serial.println("Starting full FTM sweep...");
+    FtmScheduler::enqueueFullSweep();
+
+    // Wait for completion (with timeout)
+    unsigned long deadline = millis() + 120000;  // 2 min max
+    while (FtmScheduler::isActive() && millis() < deadline) {
+        delay(1000);
+        Serial.print(".");
+    }
+    Serial.println();
+
+    if (FtmScheduler::isActive()) {
+        Serial.println("Sweep timed out (still active).");
+    } else {
+        Serial.println("Sweep complete.");
+    }
+
+    // Print distance matrix
+    uint8_t n = PeerTable::peerCount();
+    Serial.println("Distance matrix (cm):");
+    Serial.print("      ");
+    for (uint8_t j = 0; j < n; j++) Serial.printf(" %5u", j);
+    Serial.println();
+    for (uint8_t i = 0; i < n; i++) {
+        Serial.printf("  [%u] ", i);
+        for (uint8_t j = 0; j < n; j++) {
+            float d = PeerTable::getDistance(i, j);
+            if (i == j) Serial.print("    - ");
+            else if (d < 0) Serial.print("    ? ");
+            else Serial.printf("%5.0f ", d);
+        }
+        Serial.println();
+    }
+}
+
+static void menu_mds_solve()
+{
+    if (!MeshConductor::isGateway()) {
+        Serial.println("Not gateway — solver only runs on gateway.");
+        return;
+    }
+
+    Serial.println("Running MDS position solver...");
+    PositionSolver::solve();
+
+    // Print positions
+    uint8_t n = PeerTable::peerCount();
+    uint8_t dim = PeerTable::getDimension();
+    Serial.printf("Positions (%uD):\n", dim);
+    for (uint8_t i = 0; i < n; i++) {
+        PeerEntry* e = PeerTable::getEntryByIndex(i);
+        if (e) {
+            Serial.printf("  [%u] %02X:%02X  pos=(%.0f, %.0f, %.0f) cm  conf=%.2f\n",
+                i, e->mac[4], e->mac[5],
+                e->position[0], e->position[1], e->position[2], e->confidence);
+        }
+    }
+}
+
+static void menu_broadcast_pos()
+{
+    if (!MeshConductor::isGateway()) {
+        Serial.println("Not gateway.");
+        return;
+    }
+    FtmScheduler::broadcastPositions();
+    Serial.println("Positions broadcast sent.");
+}
+
 void debug_menu()
 {
 
@@ -295,6 +427,11 @@ void debug_menu()
         Serial.println("[6] RTC memory      - Write/readback test");
         Serial.println("[7] Light sleep     - Sleep N seconds");
         Serial.println("[8] Debug timeout   - Set marquee timeout");
+        Serial.println("[9] Peer table      - Show PeerTable (gateway only)");
+        Serial.println("[A] FTM single-shot - Range to one peer");
+        Serial.println("[B] FTM full sweep  - Measure all pairs");
+        Serial.println("[C] MDS solve       - Compute 3D positions");
+        Serial.println("[D] Broadcast pos   - Send positions to all");
         Serial.println("[0] Exit            - Normal boot");
         Serial.print("> ");
 
@@ -332,6 +469,21 @@ void debug_menu()
                 break;
             case '8':
                 menu_debug_timeout();
+                break;
+            case '9':
+                menu_peer_table();
+                break;
+            case 'A': case 'a':
+                menu_ftm_single();
+                break;
+            case 'B': case 'b':
+                menu_ftm_sweep();
+                break;
+            case 'C': case 'c':
+                menu_mds_solve();
+                break;
+            case 'D': case 'd':
+                menu_broadcast_pos();
                 break;
             case '0':
                 running = false;

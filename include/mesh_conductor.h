@@ -3,11 +3,19 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <esp_err.h>
 
 // --- Message types for mesh data exchange ---
 
 enum MeshMsgType : uint8_t {
-    MSG_TYPE_ELECTION = 0x01,
+    MSG_TYPE_ELECTION    = 0x01,
+    MSG_TYPE_HEARTBEAT   = 0x10,   // peer → gateway
+    MSG_TYPE_FTM_WAKE    = 0x20,   // gateway → pair
+    MSG_TYPE_FTM_READY   = 0x21,   // node → gateway
+    MSG_TYPE_FTM_GO      = 0x22,   // gateway → initiator
+    MSG_TYPE_FTM_RESULT  = 0x23,   // initiator → gateway
+    MSG_TYPE_FTM_CANCEL  = 0x24,   // gateway → pair (abort)
+    MSG_TYPE_POS_UPDATE  = 0x30,   // gateway → all
 };
 
 // --- Election score broadcast packet ---
@@ -19,6 +27,61 @@ struct __attribute__((packed)) ElectionScore {
     uint8_t  peer_count;        // number of peers this node can see
     uint16_t gateway_tenure;    // times this node has been gateway (from NVS)
     double   score;             // pre-computed score (double for overflow safety)
+};
+
+// --- Heartbeat message (peer → gateway) ---
+
+struct __attribute__((packed)) HeartbeatMsg {
+    uint8_t  type;           // MSG_TYPE_HEARTBEAT
+    uint8_t  mac[6];         // STA MAC
+    uint16_t battery_mv;
+    uint8_t  flags;          // awake/sleeping/low-battery
+    uint8_t  softap_mac[6];  // SoftAP MAC (for FTM targeting)
+};
+
+// --- FTM protocol messages ---
+
+struct __attribute__((packed)) FtmWakeMsg {
+    uint8_t  type;           // MSG_TYPE_FTM_WAKE
+    uint8_t  initiator[6];   // STA MAC of initiator
+    uint8_t  responder[6];   // STA MAC of responder
+    uint8_t  responder_ap[6]; // SoftAP MAC of responder (FTM target)
+};
+
+struct __attribute__((packed)) FtmReadyMsg {
+    uint8_t  type;           // MSG_TYPE_FTM_READY
+    uint8_t  mac[6];         // STA MAC of node reporting ready
+};
+
+struct __attribute__((packed)) FtmGoMsg {
+    uint8_t  type;           // MSG_TYPE_FTM_GO
+    uint8_t  target_ap[6];   // SoftAP MAC of responder to range against
+    uint8_t  samples;        // number of FTM frames per burst
+};
+
+struct __attribute__((packed)) FtmResultMsg {
+    uint8_t  type;           // MSG_TYPE_FTM_RESULT
+    uint8_t  initiator[6];   // STA MAC of initiator
+    uint8_t  responder[6];   // STA MAC of responder
+    float    distance_cm;    // measured distance in cm (-1 = failed)
+    uint8_t  status;         // 0 = ok, 1 = timeout, 2 = refused
+};
+
+struct __attribute__((packed)) FtmCancelMsg {
+    uint8_t  type;           // MSG_TYPE_FTM_CANCEL
+};
+
+struct __attribute__((packed)) PosUpdateEntry {
+    uint8_t  mac[6];
+    float    x, y, z;        // position in cm
+    float    confidence;
+};
+
+struct __attribute__((packed)) PosUpdateMsg {
+    uint8_t  type;           // MSG_TYPE_POS_UPDATE
+    uint8_t  dimension;      // 1=distance, 2=2D, 3=3D
+    uint8_t  count;          // number of entries following
+    // followed by count × PosUpdateEntry
 };
 
 // --- IMeshRole abstract interface ---
@@ -78,6 +141,11 @@ public:
     // Election
     static double computeScore();
     static void runElection();
+
+    // Messaging
+    static esp_err_t sendToRoot(const void* data, uint16_t len);
+    static esp_err_t sendToNode(const uint8_t* sta_mac, const void* data, uint16_t len);
+    static esp_err_t broadcastToAll(const void* data, uint16_t len);
 
     // Debug
     static void forceReelection();
