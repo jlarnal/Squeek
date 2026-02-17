@@ -2,6 +2,7 @@
 #include "peer_table.h"
 #include "nvs_config.h"
 #include "bsp.hpp"
+#include "sq_log.h"
 #include <Arduino.h>
 #include <string.h>
 #include <math.h>
@@ -96,29 +97,29 @@ void PositionSolver::init() {
         s_kalman[i].P[1] = 1000.0f;
         s_kalman[i].P[2] = 1000.0f;
     }
-    Serial.println("[solver] Initialized");
+    SqLog.println("[solver] Initialized");
 }
 
 void PositionSolver::solve() {
     uint8_t n = PeerTable::peerCount();
     if (n < 2) {
-        Serial.println("[solver] Need at least 2 nodes");
+        SqLog.println("[solver] Need at least 2 nodes");
         return;
     }
 
     uint8_t dim = PeerTable::getDimension();
-    Serial.printf("[solver] Solving %uD for %u nodes\n", dim, n);
+    SqLog.printf("[solver] Solving %uD for %u nodes\n", dim, n);
 
     // Special case: 2 nodes = distance only
     if (n == 2) {
         float dist = PeerTable::getDistance(0, 1);
         if (dist < 0) {
-            Serial.println("[solver] No distance between 2 nodes");
+            SqLog.println("[solver] No distance between 2 nodes");
             return;
         }
         PeerTable::setPosition(0, 0, 0, 0, 1.0f);
         PeerTable::setPosition(1, dist, 0, 0, 1.0f);
-        Serial.printf("[solver] 2-node: A=(0,0,0) B=(%.0f,0,0)\n", dist);
+        SqLog.printf("[solver] 2-node: A=(0,0,0) B=(%.0f,0,0)\n", dist);
         return;
     }
 
@@ -142,7 +143,7 @@ void PositionSolver::solve() {
 
     int totalPairs = (n * (n - 1)) / 2;
     if (validPairs < (int)(n - 1)) {
-        Serial.printf("[solver] Insufficient distances (%d/%d pairs)\n", validPairs, totalPairs);
+        SqLog.printf("[solver] Insufficient distances (%d/%d pairs)\n", validPairs, totalPairs);
         return;
     }
 
@@ -334,12 +335,12 @@ void PositionSolver::solve() {
         PeerTable::setPosition(i, k->x[0], k->x[1], k->x[2], conf);
     }
 
-    Serial.printf("[solver] Positions updated (%uD)\n", numDim);
+    SqLog.printf("[solver] Positions updated (%uD)\n", numDim);
 }
 
 void PositionSolver::reset() {
     for (int i = 0; i < MESH_MAX_NODES; i++) {
         s_kalman[i].initialized = false;
     }
-    Serial.println("[solver] Kalman state reset");
+    SqLog.println("[solver] Kalman state reset");
 }

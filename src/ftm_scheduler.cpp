@@ -5,6 +5,7 @@
 #include "position_solver.h"
 #include "nvs_config.h"
 #include "bsp.hpp"
+#include "sq_log.h"
 #include <Arduino.h>
 #include <esp_mac.h>
 #include <string.h>
@@ -155,7 +156,7 @@ static void processTimerCb(TimerHandle_t t) {
                 s_pairState = FTM_PAIR_WAITING_RESULT;
             }
         } else if ((millis() - s_pairStartMs) > timeout) {
-            Serial.printf("[ftmsched] Pair (%u,%u) timed out waiting for READY\n",
+            SqLog.printf("[ftmsched] Pair (%u,%u) timed out waiting for READY\n",
                 s_currentA, s_currentB);
             s_pairState = FTM_PAIR_IDLE;
         }
@@ -163,7 +164,7 @@ static void processTimerCb(TimerHandle_t t) {
 
     case FTM_PAIR_WAITING_RESULT:
         if ((millis() - s_pairStartMs) > timeout * 2) {
-            Serial.printf("[ftmsched] Pair (%u,%u) timed out waiting for RESULT\n",
+            SqLog.printf("[ftmsched] Pair (%u,%u) timed out waiting for RESULT\n",
                 s_currentA, s_currentB);
             s_pairState = FTM_PAIR_IDLE;
         }
@@ -190,7 +191,7 @@ static void startNextPair() {
         s_pairStartMs = millis();
         s_pairState = FTM_PAIR_WAITING_READY;
 
-        Serial.printf("[ftmsched] Starting pair (%u,%u) prio=%u\n",
+        SqLog.printf("[ftmsched] Starting pair (%u,%u) prio=%u\n",
             s_currentA, s_currentB, item.priority);
 
         sendWakeMessages(s_currentA, s_currentB);
@@ -199,7 +200,7 @@ static void startNextPair() {
 
     // Queue empty — measurements complete
     if (s_active) {
-        Serial.println("[ftmsched] All pairs measured, triggering solve");
+        SqLog.println("[ftmsched] All pairs measured, triggering solve");
         s_active = false;
         FtmScheduler::triggerSolve();
     }
@@ -257,7 +258,7 @@ void FtmScheduler::init() {
         xTimerStart(s_sweepTimer, 0);
     }
 
-    Serial.println("[ftmsched] Initialized");
+    SqLog.println("[ftmsched] Initialized");
 }
 
 void FtmScheduler::shutdown() {
@@ -266,7 +267,7 @@ void FtmScheduler::shutdown() {
     s_active = false;
     s_queueCount = 0;
     s_pairState = FTM_PAIR_IDLE;
-    Serial.println("[ftmsched] Shutdown");
+    SqLog.println("[ftmsched] Shutdown");
 }
 
 void FtmScheduler::enqueuePair(uint8_t nodeA_idx, uint8_t nodeB_idx, FtmPriority prio) {
@@ -286,7 +287,7 @@ void FtmScheduler::enqueuePair(uint8_t nodeA_idx, uint8_t nodeB_idx, FtmPriority
 
 void FtmScheduler::enqueueFullSweep() {
     uint8_t count = PeerTable::peerCount();
-    Serial.printf("[ftmsched] Full sweep: %u nodes, %u pairs\n",
+    SqLog.printf("[ftmsched] Full sweep: %u nodes, %u pairs\n",
         count, (count * (count - 1)) / 2);
 
     for (uint8_t i = 0; i < count; i++) {
@@ -309,7 +310,7 @@ void FtmScheduler::enqueueNewNode(uint8_t node_idx) {
         queued++;
     }
 
-    Serial.printf("[ftmsched] Queued %u anchor pairs for new node %u\n", queued, node_idx);
+    SqLog.printf("[ftmsched] Queued %u anchor pairs for new node %u\n", queued, node_idx);
 }
 
 void FtmScheduler::onFtmReady(const uint8_t* mac) {
@@ -321,11 +322,11 @@ void FtmScheduler::onFtmReady(const uint8_t* mac) {
 
     if (memcmp(mac, a->mac, 6) == 0) {
         s_readyA = true;
-        Serial.printf("[ftmsched] Node A (slot %u) ready\n", s_currentA);
+        SqLog.printf("[ftmsched] Node A (slot %u) ready\n", s_currentA);
     }
     if (memcmp(mac, b->mac, 6) == 0) {
         s_readyB = true;
-        Serial.printf("[ftmsched] Node B (slot %u) ready\n", s_currentB);
+        SqLog.printf("[ftmsched] Node B (slot %u) ready\n", s_currentB);
     }
 
     // Check if both ready — immediate transition
@@ -342,7 +343,7 @@ void FtmScheduler::onFtmReady(const uint8_t* mac) {
 void FtmScheduler::onFtmResult(const uint8_t* initiator, const uint8_t* responder,
                                  float distance_cm, uint8_t status) {
     if (s_pairState != FTM_PAIR_WAITING_RESULT) {
-        Serial.println("[ftmsched] Unexpected FTM result (not waiting)");
+        SqLog.println("[ftmsched] Unexpected FTM result (not waiting)");
         return;
     }
 
@@ -352,10 +353,10 @@ void FtmScheduler::onFtmResult(const uint8_t* initiator, const uint8_t* responde
         s_lastMeasured[s_currentA][s_currentB] = millis();
         s_lastMeasured[s_currentB][s_currentA] = millis();
 
-        Serial.printf("[ftmsched] Pair (%u,%u) distance=%.1f cm\n",
+        SqLog.printf("[ftmsched] Pair (%u,%u) distance=%.1f cm\n",
             s_currentA, s_currentB, distance_cm);
     } else {
-        Serial.printf("[ftmsched] Pair (%u,%u) FAILED status=%u\n",
+        SqLog.printf("[ftmsched] Pair (%u,%u) FAILED status=%u\n",
             s_currentA, s_currentB, status);
     }
 
@@ -393,7 +394,7 @@ void FtmScheduler::broadcastPositions() {
     }
 
     MeshConductor::broadcastToAll(buf, msgSize);
-    Serial.printf("[ftmsched] Broadcast %u positions (%uD)\n", count, dim);
+    SqLog.printf("[ftmsched] Broadcast %u positions (%uD)\n", count, dim);
 }
 
 bool FtmScheduler::isActive() {
@@ -401,16 +402,16 @@ bool FtmScheduler::isActive() {
 }
 
 void FtmScheduler::print() {
-    Serial.println("=== FTM Scheduler ===");
-    Serial.printf("Queue: %u items, State: %u, Active: %s\n",
+    SqLog.println("=== FTM Scheduler ===");
+    SqLog.printf("Queue: %u items, State: %u, Active: %s\n",
         s_queueCount, s_pairState, s_active ? "yes" : "no");
     if (s_pairState != FTM_PAIR_IDLE) {
-        Serial.printf("Current pair: (%u,%u) readyA=%d readyB=%d\n",
+        SqLog.printf("Current pair: (%u,%u) readyA=%d readyB=%d\n",
             s_currentA, s_currentB, s_readyA, s_readyB);
     }
     for (uint8_t i = 0; i < s_queueCount; i++) {
         uint8_t idx = (s_queueHead + i) % FTM_QUEUE_MAX;
-        Serial.printf("  [%u] pair=(%u,%u) prio=%u\n",
+        SqLog.printf("  [%u] pair=(%u,%u) prio=%u\n",
             i, s_queue[idx].nodeA_idx, s_queue[idx].nodeB_idx, s_queue[idx].priority);
     }
 }

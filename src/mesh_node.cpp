@@ -3,6 +3,7 @@
 #include "power_manager.h"
 #include "nvs_config.h"
 #include "bsp.hpp"
+#include "sq_log.h"
 #include <Arduino.h>
 #include <esp_system.h>
 #include <esp_mac.h>
@@ -27,7 +28,7 @@ static void heartbeatTimerCb(TimerHandle_t t) {
 
 void MeshNode::begin() {
     m_gatewayAlive = true;
-    Serial.println("[node] MeshNode role active");
+    SqLog.println("[node] MeshNode role active");
 
     // Initialize FTM manager (for responding to FTM_WAKE/GO)
     FtmManager::init();
@@ -47,24 +48,24 @@ void MeshNode::begin() {
 }
 
 void MeshNode::end() {
-    Serial.println("[node] MeshNode role stopping");
+    SqLog.println("[node] MeshNode role stopping");
     if (s_hbTimer) {
         xTimerStop(s_hbTimer, 0);
     }
 }
 
 void MeshNode::onPeerJoined(const uint8_t* mac) {
-    Serial.printf("[node] Peer joined: %02X:%02X:%02X:%02X:%02X:%02X\n",
+    SqLog.printf("[node] Peer joined: %02X:%02X:%02X:%02X:%02X:%02X\n",
         mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }
 
 void MeshNode::onPeerLeft(const uint8_t* mac) {
-    Serial.printf("[node] Peer left: %02X:%02X:%02X:%02X:%02X:%02X\n",
+    SqLog.printf("[node] Peer left: %02X:%02X:%02X:%02X:%02X:%02X\n",
         mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }
 
 void MeshNode::onGatewayLost() {
-    Serial.println("[node] WARNING: Gateway lost — sleep and reboot for re-election");
+    SqLog.println("[node] WARNING: Gateway lost — sleep and reboot for re-election");
     m_gatewayAlive = false;
     if (s_hbTimer) {
         xTimerStop(s_hbTimer, 0);
@@ -75,6 +76,6 @@ void MeshNode::onGatewayLost() {
 }
 
 void MeshNode::printStatus() {
-    Serial.println("--- Node Status ---");
-    Serial.printf("Gateway alive: %s\n", m_gatewayAlive ? "yes" : "no");
+    SqLog.println("--- Node Status ---");
+    SqLog.printf("Gateway alive: %s\n", m_gatewayAlive ? "yes" : "no");
 }

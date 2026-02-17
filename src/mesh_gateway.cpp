@@ -6,6 +6,7 @@
 #include "power_manager.h"
 #include "nvs_config.h"
 #include "bsp.hpp"
+#include "sq_log.h"
 #include <Arduino.h>
 
 // Gateway self-heartbeat timer — updates own battery in PeerTable
@@ -18,7 +19,7 @@ static void gwHeartbeatCb(TimerHandle_t t) {
 
 void Gateway::begin() {
     m_peerCount = 0;
-    Serial.println("[gateway] Gateway role active");
+    SqLog.println("[gateway] Gateway role active");
 
     // Initialize Phase 2 subsystems
     PeerTable::init();
@@ -38,7 +39,7 @@ void Gateway::begin() {
 }
 
 void Gateway::end() {
-    Serial.println("[gateway] Gateway role stopping");
+    SqLog.println("[gateway] Gateway role stopping");
 
     if (s_gwHeartbeatTimer) {
         xTimerStop(s_gwHeartbeatTimer, 0);
@@ -50,7 +51,7 @@ void Gateway::end() {
 
 void Gateway::onPeerJoined(const uint8_t* mac) {
     m_peerCount++;
-    Serial.printf("[gateway] Peer joined (%u total): %02X:%02X:%02X:%02X:%02X:%02X\n",
+    SqLog.printf("[gateway] Peer joined (%u total): %02X:%02X:%02X:%02X:%02X:%02X\n",
         m_peerCount, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
     // Peer will send heartbeat shortly — PeerTable entry created on first heartbeat.
@@ -59,7 +60,7 @@ void Gateway::onPeerJoined(const uint8_t* mac) {
 
 void Gateway::onPeerLeft(const uint8_t* mac) {
     if (m_peerCount > 0) m_peerCount--;
-    Serial.printf("[gateway] Peer left (%u remaining): %02X:%02X:%02X:%02X:%02X:%02X\n",
+    SqLog.printf("[gateway] Peer left (%u remaining): %02X:%02X:%02X:%02X:%02X:%02X\n",
         m_peerCount, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
     // Mark peer as dead in PeerTable
@@ -70,7 +71,7 @@ void Gateway::onPeerLeft(const uint8_t* mac) {
 }
 
 void Gateway::printStatus() {
-    Serial.println("--- Gateway Status ---");
-    Serial.printf("Peers: %u\n", m_peerCount);
+    SqLog.println("--- Gateway Status ---");
+    SqLog.printf("Peers: %u\n", m_peerCount);
     PeerTable::print();
 }

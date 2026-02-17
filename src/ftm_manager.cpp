@@ -2,6 +2,7 @@
 #include "mesh_conductor.h"
 #include "nvs_config.h"
 #include "bsp.hpp"
+#include "sq_log.h"
 #include <Arduino.h>
 #include <esp_wifi.h>
 #include <esp_event.h>
@@ -82,7 +83,7 @@ static void ftmEventHandler(void* arg, esp_event_base_t event_base,
                         s_ftmDistResult += (float)s_responderOffset;
                         s_ftmSuccess = true;
 
-                        Serial.printf("[ftm] RTT avg=%.0f ps (kept %u/%u), dist=%.1f cm\n",
+                        SqLog.printf("[ftm] RTT avg=%.0f ps (kept %u/%u), dist=%.1f cm\n",
                             avg_rtt_ps, filtered_count, count, s_ftmDistResult);
                     } else {
                         s_ftmSuccess = false;
@@ -95,13 +96,13 @@ static void ftmEventHandler(void* arg, esp_event_base_t event_base,
                 s_ftmDistResult = (float)report->dist_est / 100.0f;  // mm to cm
                 s_ftmDistResult += (float)s_responderOffset;
                 s_ftmSuccess = true;
-                Serial.printf("[ftm] Report-level dist=%.1f cm\n", s_ftmDistResult);
+                SqLog.printf("[ftm] Report-level dist=%.1f cm\n", s_ftmDistResult);
             }
 
             // Free the report data
             free(report->ftm_report_data);
         } else {
-            Serial.printf("[ftm] FTM failed, status=%d\n", report->status);
+            SqLog.printf("[ftm] FTM failed, status=%d\n", report->status);
             s_ftmSuccess = false;
             s_ftmDistResult = -1.0f;
         }
@@ -126,12 +127,12 @@ void FtmManager::init() {
     // Set responder offset from NVS
     s_responderOffset = (int16_t)(uint32_t)NvsConfigManager::ftmResponderOffset_cm;
 
-    Serial.printf("[ftm] Initialized, responder offset=%d cm\n", s_responderOffset);
+    SqLog.printf("[ftm] Initialized, responder offset=%d cm\n", s_responderOffset);
 }
 
 float FtmManager::initiateSession(const uint8_t* target_ap_mac, uint8_t channel, uint8_t samples) {
     if (s_busy) {
-        Serial.println("[ftm] Session already in progress");
+        SqLog.println("[ftm] Session already in progress");
         return -1.0f;
     }
 
@@ -145,14 +146,14 @@ float FtmManager::initiateSession(const uint8_t* target_ap_mac, uint8_t channel,
     cfg.frm_count = (samples > 0) ? samples : 8;
     cfg.burst_period = 2;  // 200ms burst period
 
-    Serial.printf("[ftm] Initiating to %02X:%02X:%02X:%02X:%02X:%02X ch=%d frames=%d\n",
+    SqLog.printf("[ftm] Initiating to %02X:%02X:%02X:%02X:%02X:%02X ch=%d frames=%d\n",
         target_ap_mac[0], target_ap_mac[1], target_ap_mac[2],
         target_ap_mac[3], target_ap_mac[4], target_ap_mac[5],
         channel, cfg.frm_count);
 
     esp_err_t err = esp_wifi_ftm_initiate_session(&cfg);
     if (err != ESP_OK) {
-        Serial.printf("[ftm] esp_wifi_ftm_initiate_session failed: %s\n", esp_err_to_name(err));
+        SqLog.printf("[ftm] esp_wifi_ftm_initiate_session failed: %s\n", esp_err_to_name(err));
         s_busy = false;
         return -1.0f;
     }
@@ -160,7 +161,7 @@ float FtmManager::initiateSession(const uint8_t* target_ap_mac, uint8_t channel,
     // Wait for result (with timeout)
     uint32_t timeout_ms = (uint32_t)NvsConfigManager::ftmPairTimeout_ms;
     if (xSemaphoreTake(s_ftmSem, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) {
-        Serial.println("[ftm] Session timed out");
+        SqLog.println("[ftm] Session timed out");
         esp_wifi_ftm_end_session();
         s_busy = false;
         return -1.0f;
@@ -182,7 +183,7 @@ void FtmManager::onFtmWake(const uint8_t* initiator_mac, const uint8_t* responde
 
     if (!isInitiator && !isResponder) return;
 
-    Serial.printf("[ftm] WAKE received — I am %s\n", isInitiator ? "INITIATOR" : "RESPONDER");
+    SqLog.printf("[ftm] WAKE received — I am %s\n", isInitiator ? "INITIATOR" : "RESPONDER");
 
     // Store responder AP MAC for the GO message
     if (isInitiator) {
@@ -197,7 +198,7 @@ void FtmManager::onFtmWake(const uint8_t* initiator_mac, const uint8_t* responde
 }
 
 void FtmManager::onFtmGo(const uint8_t* target_ap_mac, uint8_t samples) {
-    Serial.printf("[ftm] GO received — ranging to %02X:%02X:%02X:%02X:%02X:%02X\n",
+    SqLog.printf("[ftm] GO received — ranging to %02X:%02X:%02X:%02X:%02X:%02X\n",
         target_ap_mac[0], target_ap_mac[1], target_ap_mac[2],
         target_ap_mac[3], target_ap_mac[4], target_ap_mac[5]);
 

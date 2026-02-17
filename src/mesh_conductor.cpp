@@ -6,6 +6,7 @@
 #include "rtc_mesh_map.h"
 #include "power_manager.h"
 #include "nvs_config.h"
+#include "sq_log.h"
 #include <Arduino.h>
 #include <string.h>
 #include <esp_wifi.h>
@@ -146,10 +147,10 @@ static void assignRole(const uint8_t* winnerMac) {
         s_gwTenure++;
         nvsWriteTenure();
         newRole = &s_gateway;
-        Serial.println("[mesh] Role assigned: GATEWAY");
+        SqLog.println("[mesh] Role assigned: GATEWAY");
     } else {
         newRole = &s_meshNode;
-        Serial.printf("[mesh] Role assigned: NODE (gateway=%02X:%02X:%02X:%02X:%02X:%02X)\n",
+        SqLog.printf("[mesh] Role assigned: NODE (gateway=%02X:%02X:%02X:%02X:%02X:%02X)\n",
             winnerMac[0], winnerMac[1], winnerMac[2],
             winnerMac[3], winnerMac[4], winnerMac[5]);
     }
@@ -192,7 +193,7 @@ static void electionTimerCallback(TimerHandle_t xTimer) {
     if (!esp_mesh_is_root()) {
         int totalNodes = esp_mesh_get_total_node_num();
         if ((int)s_scoreCount < totalNodes) {
-            Serial.println("[mesh] Election timeout (non-root) — accepting peer role");
+            SqLog.println("[mesh] Election timeout (non-root) — accepting peer role");
             if (s_role != &s_meshNode) {
                 if (s_role) s_role->end();
                 s_role = &s_meshNode;
@@ -217,9 +218,9 @@ static void electionTimerCallback(TimerHandle_t xTimer) {
         buildOwnScore(&s_scores[s_scoreCount++]);
     }
 
-    Serial.printf("[mesh] Election: %d candidates\n", s_scoreCount);
+    SqLog.printf("[mesh] Election: %d candidates\n", s_scoreCount);
     for (uint8_t i = 0; i < s_scoreCount; i++) {
-        Serial.printf("[mesh]   %02X:%02X:%02X:%02X:%02X:%02X  bat=%umV peers=%u tenure=%u score=%.1f\n",
+        SqLog.printf("[mesh]   %02X:%02X:%02X:%02X:%02X:%02X  bat=%umV peers=%u tenure=%u score=%.1f\n",
             s_scores[i].mac[0], s_scores[i].mac[1], s_scores[i].mac[2],
             s_scores[i].mac[3], s_scores[i].mac[4], s_scores[i].mac[5],
             s_scores[i].battery_mv, s_scores[i].peer_count,
@@ -228,7 +229,7 @@ static void electionTimerCallback(TimerHandle_t xTimer) {
 
     const uint8_t* winner = pickWinner();
     if (winner) {
-        Serial.printf("[mesh] Election winner: %02X:%02X:%02X:%02X:%02X:%02X\n",
+        SqLog.printf("[mesh] Election winner: %02X:%02X:%02X:%02X:%02X:%02X\n",
             winner[0], winner[1], winner[2], winner[3], winner[4], winner[5]);
 
         // Check if ESP-IDF root matches election winner
@@ -238,7 +239,7 @@ static void electionTimerCallback(TimerHandle_t xTimer) {
             vote.percentage = 0.8f;
             vote.is_rc_specified = true;
             memcpy(vote.config.rc_addr.addr, winner, 6);
-            Serial.println("[mesh] Waiving root to election winner...");
+            SqLog.println("[mesh] Waiving root to election winner...");
             esp_mesh_waive_root(&vote, MESH_VOTE_REASON_ROOT_INITIATED);
             // Role will be assigned after root migration completes
             // For now, assign as node; if migration fails, timeout will reassign
@@ -248,7 +249,7 @@ static void electionTimerCallback(TimerHandle_t xTimer) {
         }
     } else {
         // Fallback: current root stays as gateway
-        Serial.println("[mesh] Election fallback: current root keeps gateway");
+        SqLog.println("[mesh] Election fallback: current root keeps gateway");
         if (esp_mesh_is_root()) {
             assignRole(own_mac);
         } else {
@@ -279,7 +280,7 @@ void MeshConductor::runElection() {
 
     if (totalNodes <= 1) {
         // Single node — instant self-election
-        Serial.println("[mesh] Single node — self-electing as Gateway");
+        SqLog.println("[mesh] Single node — self-electing as Gateway");
         uint8_t own_mac[6];
         esp_read_mac(own_mac, ESP_MAC_WIFI_STA);
         assignRole(own_mac);
@@ -341,7 +342,7 @@ static void meshRxTask(void* pvParameters) {
                 }
                 if (!dup && s_scoreCount < MESH_MAX_NODES) {
                     s_scores[s_scoreCount++] = *incoming;
-                    Serial.printf("[mesh] Received election score from %02X:%02X:%02X:%02X:%02X:%02X score=%.1f\n",
+                    SqLog.printf("[mesh] Received election score from %02X:%02X:%02X:%02X:%02X:%02X score=%.1f\n",
                         incoming->mac[0], incoming->mac[1], incoming->mac[2],
                         incoming->mac[3], incoming->mac[4], incoming->mac[5],
                         incoming->score);
@@ -413,12 +414,12 @@ static void meshRxTask(void* pvParameters) {
             }
             else if (msgType == MSG_TYPE_FTM_CANCEL) {
                 // Cancel any in-progress FTM session
-                Serial.println("[mesh] FTM_CANCEL received");
+                SqLog.println("[mesh] FTM_CANCEL received");
             }
             else if (msgType == MSG_TYPE_POS_UPDATE && data.size >= sizeof(PosUpdateMsg)) {
                 PosUpdateMsg* pos = (PosUpdateMsg*)rx_buf;
                 PosUpdateEntry* entries = (PosUpdateEntry*)(rx_buf + sizeof(PosUpdateMsg));
-                Serial.printf("[mesh] POS_UPDATE: %u nodes, %uD\n", pos->count, pos->dimension);
+                SqLog.printf("[mesh] POS_UPDATE: %u nodes, %uD\n", pos->count, pos->dimension);
                 // Nodes could store their own position from this
             }
         }
@@ -458,7 +459,7 @@ static void promoteTimerCb(TimerHandle_t t) {
     (void)t;
     if (s_connected || esp_mesh_is_root()) return;
 
-    Serial.println("[mesh] Self-promoting to root (no existing mesh)");
+    SqLog.println("[mesh] Self-promoting to root (no existing mesh)");
     esp_mesh_set_type(MESH_ROOT);
     esp_mesh_set_self_organized(true, false);  // re-enable so children can join
 
@@ -479,7 +480,7 @@ static void meshEventHandler(void* arg, esp_event_base_t event_base,
                               int32_t event_id, void* event_data) {
     switch (event_id) {
     case MESH_EVENT_STARTED:
-        Serial.println("[mesh] Mesh started");
+        SqLog.println("[mesh] Mesh started");
         s_started = true;
         // Start RX task
         xTaskCreateUniversal(meshRxTask, "meshRx", 4096, nullptr,
@@ -487,18 +488,18 @@ static void meshEventHandler(void* arg, esp_event_base_t event_base,
         break;
 
     case MESH_EVENT_STOPPED:
-        Serial.println("[mesh] Mesh stopped");
+        SqLog.println("[mesh] Mesh stopped");
         s_started = false;
         s_connected = false;
         break;
 
     case MESH_EVENT_PARENT_CONNECTED: {
         if (s_promoteTimer) xTimerStop(s_promoteTimer, 0);
-        Serial.println("[mesh] Parent connected");
+        SqLog.println("[mesh] Parent connected");
         s_connected = true;
         s_parentRetries = 0;
         if (esp_mesh_is_root()) {
-            Serial.println("[mesh] I am ROOT");
+            SqLog.println("[mesh] I am ROOT");
         }
         updateRtcMap();
 
@@ -510,7 +511,7 @@ static void meshEventHandler(void* arg, esp_event_base_t event_base,
     }
 
     case MESH_EVENT_PARENT_DISCONNECTED:
-        Serial.println("[mesh] Parent disconnected");
+        SqLog.println("[mesh] Parent disconnected");
         s_connected = false;
         updateRtcMap();
         if (s_role && !s_role->isGateway()) {
@@ -520,7 +521,7 @@ static void meshEventHandler(void* arg, esp_event_base_t event_base,
 
     case MESH_EVENT_CHILD_CONNECTED: {
         mesh_event_child_connected_t* child = (mesh_event_child_connected_t*)event_data;
-        Serial.printf("[mesh] Child connected: %02X:%02X:%02X:%02X:%02X:%02X\n",
+        SqLog.printf("[mesh] Child connected: %02X:%02X:%02X:%02X:%02X:%02X\n",
             child->mac[0], child->mac[1], child->mac[2],
             child->mac[3], child->mac[4], child->mac[5]);
         if (s_role) s_role->onPeerJoined(child->mac);
@@ -528,7 +529,7 @@ static void meshEventHandler(void* arg, esp_event_base_t event_base,
 
         // Re-run election so the new child can participate
         if (s_electionDone && esp_mesh_is_root()) {
-            Serial.println("[mesh] Child joined after election — re-electing");
+            SqLog.println("[mesh] Child joined after election — re-electing");
             s_electionDone = false;
             s_scoreCount = 0;
             startSettleTimer();
@@ -538,7 +539,7 @@ static void meshEventHandler(void* arg, esp_event_base_t event_base,
 
     case MESH_EVENT_CHILD_DISCONNECTED: {
         mesh_event_child_disconnected_t* child = (mesh_event_child_disconnected_t*)event_data;
-        Serial.printf("[mesh] Child disconnected: %02X:%02X:%02X:%02X:%02X:%02X\n",
+        SqLog.printf("[mesh] Child disconnected: %02X:%02X:%02X:%02X:%02X:%02X\n",
             child->mac[0], child->mac[1], child->mac[2],
             child->mac[3], child->mac[4], child->mac[5]);
         if (s_role) s_role->onPeerLeft(child->mac);
@@ -553,7 +554,7 @@ static void meshEventHandler(void* arg, esp_event_base_t event_base,
 
     case MESH_EVENT_ROOT_ADDRESS: {
         mesh_event_root_address_t* root = (mesh_event_root_address_t*)event_data;
-        Serial.printf("[mesh] Root address: %02X:%02X:%02X:%02X:%02X:%02X\n",
+        SqLog.printf("[mesh] Root address: %02X:%02X:%02X:%02X:%02X:%02X\n",
             root->addr[0], root->addr[1], root->addr[2],
             root->addr[3], root->addr[4], root->addr[5]);
         rtc_mesh_map_t* map = RtcMap::get();
@@ -564,12 +565,12 @@ static void meshEventHandler(void* arg, esp_event_base_t event_base,
 
     case MESH_EVENT_NO_PARENT_FOUND:
         s_parentRetries++;
-        Serial.printf("[mesh] No parent found (attempt %u)\n", s_parentRetries);
+        SqLog.printf("[mesh] No parent found (attempt %u)\n", s_parentRetries);
         if (!esp_mesh_is_root()) {
             uint8_t mac[6];
             esp_read_mac(mac, ESP_MAC_WIFI_STA);
             uint16_t jitter = ((mac[4] << 8) | mac[5]) % 2000;
-            Serial.printf("[mesh] Scheduling root promotion in %u ms\n", jitter);
+            SqLog.printf("[mesh] Scheduling root promotion in %u ms\n", jitter);
             if (s_promoteTimer == nullptr) {
                 s_promoteTimer = xTimerCreate("promote",
                     pdMS_TO_TICKS(jitter > 0 ? jitter : 1),
@@ -581,7 +582,7 @@ static void meshEventHandler(void* arg, esp_event_base_t event_base,
             xTimerStart(s_promoteTimer, 0);
         } else {
             if (s_parentRetries >= MESH_MAX_RETRIES) {
-                Serial.println("[mesh] Root with no children — rebooting");
+                SqLog.println("[mesh] Root with no children — rebooting");
                 MeshConductor::stop();
                 SQ_LIGHT_SLEEP(MESH_REELECT_SLEEP_MS);
                 esp_restart();
@@ -590,11 +591,11 @@ static void meshEventHandler(void* arg, esp_event_base_t event_base,
         break;
 
     case MESH_EVENT_ROOT_SWITCH_REQ:
-        Serial.println("[mesh] Root switch requested — accepting");
+        SqLog.println("[mesh] Root switch requested — accepting");
         break;
 
     default:
-        Serial.printf("[mesh] Event %ld\n", event_id);
+        SqLog.printf("[mesh] Event %ld\n", event_id);
         break;
     }
 }
@@ -614,7 +615,7 @@ void MeshConductor::init() {
     }
 
     nvsReadTenure();
-    Serial.printf("[mesh] Gateway tenure from NVS: %u\n", s_gwTenure);
+    SqLog.printf("[mesh] Gateway tenure from NVS: %u\n", s_gwTenure);
 
     // Initialize network interface
     ESP_ERROR_CHECK(esp_netif_init());
@@ -702,7 +703,7 @@ void MeshConductor::start() {
     s_parentRetries = 0;
 
     ESP_ERROR_CHECK(esp_mesh_start());
-    Serial.println("[mesh] Mesh starting...");
+    SqLog.println("[mesh] Mesh starting...");
 }
 
 void MeshConductor::stop() {
@@ -738,25 +739,25 @@ IMeshRole* MeshConductor::role() {
 }
 
 void MeshConductor::printStatus() {
-    Serial.println("=== Mesh Status ===");
-    Serial.printf("Started: %s\n", s_started ? "yes" : "no");
-    Serial.printf("Connected: %s\n", s_connected ? "yes" : "no");
-    Serial.printf("Is Root: %s\n", esp_mesh_is_root() ? "yes" : "no");
-    Serial.printf("Election done: %s\n", s_electionDone ? "yes" : "no");
-    Serial.printf("Role: %s\n", s_role ? (s_role->isGateway() ? "GATEWAY" : "NODE") : "none");
-    Serial.printf("Layer: %d\n", esp_mesh_get_layer());
-    Serial.printf("Gateway tenure: %u\n", s_gwTenure);
+    SqLog.println("=== Mesh Status ===");
+    SqLog.printf("Started: %s\n", s_started ? "yes" : "no");
+    SqLog.printf("Connected: %s\n", s_connected ? "yes" : "no");
+    SqLog.printf("Is Root: %s\n", esp_mesh_is_root() ? "yes" : "no");
+    SqLog.printf("Election done: %s\n", s_electionDone ? "yes" : "no");
+    SqLog.printf("Role: %s\n", s_role ? (s_role->isGateway() ? "GATEWAY" : "NODE") : "none");
+    SqLog.printf("Layer: %d\n", esp_mesh_get_layer());
+    SqLog.printf("Gateway tenure: %u\n", s_gwTenure);
 
     int total = esp_mesh_get_total_node_num();
-    Serial.printf("Total nodes: %d\n", total);
+    SqLog.printf("Total nodes: %d\n", total);
 
     mesh_addr_t routing_table[MESH_MAX_NODES];
     int table_size = 0;
     esp_mesh_get_routing_table(routing_table, MESH_MAX_NODES, &table_size);
-    Serial.printf("Routing table size: %d\n", table_size);
+    SqLog.printf("Routing table size: %d\n", table_size);
 
     for (int i = 0; i < table_size; i++) {
-        Serial.printf("  [%d] %02X:%02X:%02X:%02X:%02X:%02X\n", i,
+        SqLog.printf("  [%d] %02X:%02X:%02X:%02X:%02X:%02X\n", i,
             routing_table[i].addr[0], routing_table[i].addr[1],
             routing_table[i].addr[2], routing_table[i].addr[3],
             routing_table[i].addr[4], routing_table[i].addr[5]);
@@ -768,7 +769,7 @@ void MeshConductor::printStatus() {
 }
 
 void MeshConductor::forceReelection() {
-    Serial.println("[mesh] Forcing re-election — sleep and reboot...");
+    SqLog.println("[mesh] Forcing re-election — sleep and reboot...");
     if (s_role) {
         s_role->end();
         s_role = nullptr;

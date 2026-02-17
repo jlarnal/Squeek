@@ -2,6 +2,7 @@
 #include "mesh_conductor.h"
 #include "nvs_config.h"
 #include "power_manager.h"
+#include "sq_log.h"
 #include <Arduino.h>
 #include <esp_mac.h>
 #include <string.h>
@@ -69,7 +70,7 @@ void PeerTable::init() {
     }
     xTimerStart(s_stalenessTimer, 0);
 
-    Serial.printf("[ptable] Initialized, self = slot 0\n");
+    SqLog.printf("[ptable] Initialized, self = slot 0\n");
 }
 
 void PeerTable::shutdown() {
@@ -77,7 +78,7 @@ void PeerTable::shutdown() {
         xTimerStop(s_stalenessTimer, 0);
     }
     s_count = 0;
-    Serial.println("[ptable] Shutdown");
+    SqLog.println("[ptable] Shutdown");
 }
 
 void PeerTable::updateFromHeartbeat(const uint8_t* mac, uint16_t battery_mv,
@@ -86,13 +87,13 @@ void PeerTable::updateFromHeartbeat(const uint8_t* mac, uint16_t battery_mv,
     if (idx < 0) {
         // New peer — add to table
         if (s_count >= MESH_MAX_NODES) {
-            Serial.println("[ptable] Table full, ignoring new peer");
+            SqLog.println("[ptable] Table full, ignoring new peer");
             return;
         }
         idx = s_count++;
         clearEntry(&s_entries[idx]);
         memcpy(s_entries[idx].mac, mac, 6);
-        Serial.printf("[ptable] New peer at slot %d: %02X:%02X:%02X:%02X:%02X:%02X\n",
+        SqLog.printf("[ptable] New peer at slot %d: %02X:%02X:%02X:%02X:%02X:%02X\n",
             idx, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     }
 
@@ -123,7 +124,7 @@ void PeerTable::scanStaleness() {
 
         if ((now - s_entries[i].last_seen_ms) > stale_ms) {
             s_entries[i].flags = PEER_STATUS_DEAD;
-            Serial.printf("[ptable] Peer slot %d DEAD (stale %lu ms)\n",
+            SqLog.printf("[ptable] Peer slot %d DEAD (stale %lu ms)\n",
                 i, now - s_entries[i].last_seen_ms);
         }
     }
@@ -142,7 +143,7 @@ void PeerTable::checkReelection() {
     }
 
     if (best_battery > gw_battery && (best_battery - gw_battery) >= delta) {
-        Serial.printf("[ptable] Re-election: gateway battery %u mV, best peer %u mV (delta >= %u)\n",
+        SqLog.printf("[ptable] Re-election: gateway battery %u mV, best peer %u mV (delta >= %u)\n",
             gw_battery, best_battery, delta);
         MeshConductor::forceReelection();
     }
@@ -204,15 +205,15 @@ uint8_t PeerTable::getDimension() {
 }
 
 void PeerTable::print() {
-    Serial.println("=== Peer Table ===");
-    Serial.printf("Entries: %u, Alive: %u, Dimension: %uD\n",
+    SqLog.println("=== Peer Table ===");
+    SqLog.printf("Entries: %u, Alive: %u, Dimension: %uD\n",
         s_count, alivePeerCount(), getDimension());
 
     for (uint8_t i = 0; i < s_count; i++) {
         PeerEntry* e = &s_entries[i];
         const char* status = (e->flags & PEER_STATUS_DEAD) ? "DEAD" :
                              (e->flags & PEER_STATUS_SLEEPING) ? "SLEEP" : "ALIVE";
-        Serial.printf("  [%u] %02X:%02X:%02X:%02X:%02X:%02X  bat=%umV  %s  pos=(%.0f,%.0f,%.0f) conf=%.2f\n",
+        SqLog.printf("  [%u] %02X:%02X:%02X:%02X:%02X:%02X  bat=%umV  %s  pos=(%.0f,%.0f,%.0f) conf=%.2f\n",
             i, e->mac[0], e->mac[1], e->mac[2], e->mac[3], e->mac[4], e->mac[5],
             e->battery_mv, status, e->position[0], e->position[1], e->position[2],
             e->confidence);
