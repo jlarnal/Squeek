@@ -158,6 +158,8 @@ static void cmd_elect(const char* args) {
         Serial.println("Mesh not connected. Run 'mesh' first.");
         return;
     }
+    Serial.println("Forcing re-election (will reboot)...");
+    Serial.flush();
     MeshConductor::forceReelection();
 }
 
@@ -231,8 +233,6 @@ static void cmd_ftm(const char* args) {
     }
 
     Serial.println("FTM single-shot test");
-    Serial.println("Initializing FTM manager...");
-    FtmManager::init();
 
     if (MeshConductor::isGateway() && PeerTable::peerCount() >= 2) {
         PeerEntry* peer = PeerTable::getEntryByIndex(1);
@@ -253,8 +253,20 @@ static void cmd_ftm(const char* args) {
         }
     }
 
-    Serial.println("No peer available for FTM. Need at least 1 peer with known SoftAP MAC.");
-    Serial.println("(Peer must have sent a heartbeat so its SoftAP MAC is in PeerTable)");
+    Serial.printf("No peer available for FTM. PeerTable has %d entries (need >= 2).\n",
+        PeerTable::peerCount());
+    if (!MeshConductor::isGateway()) {
+        Serial.println("(Not gateway -- FTM ranging only runs on gateway)");
+    } else if (PeerTable::peerCount() >= 2) {
+        PeerEntry* p = PeerTable::getEntryByIndex(1);
+        if (p) {
+            Serial.printf("Slot 1 SoftAP: %02X:%02X:%02X:%02X:%02X:%02X flags=0x%02X\n",
+                p->softap_mac[0], p->softap_mac[1], p->softap_mac[2],
+                p->softap_mac[3], p->softap_mac[4], p->softap_mac[5], p->flags);
+        }
+    } else {
+        Serial.println("(Peer must have sent a heartbeat so its SoftAP MAC is in PeerTable)");
+    }
 }
 
 static void cmd_sweep(const char* args) {

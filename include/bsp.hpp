@@ -55,8 +55,8 @@
 #define NVS_DEFAULT_ELECT_W_LOWBAT_PEN  0.1f
 #define NVS_DEFAULT_CLR_INIT            0x00140600   // orange (20,6,0)
 #define NVS_DEFAULT_CLR_READY           0x00140F00   // yellow  (20,15,0)
-#define NVS_DEFAULT_CLR_GATEWAY         0x00000800   // dim green      (0,255,0)
-#define NVS_DEFAULT_CLR_PEER            0x00000008   // dim blue   (0,10,15)
+#define NVS_DEFAULT_CLR_GATEWAY         0x00000008   // dim blue   (0,10,15)
+#define NVS_DEFAULT_CLR_PEER            0x00000800   // dim green      (0,255,0)
 #define NVS_DEFAULT_CLR_DISCONNECTED    0x00200000   // dim red        (255,0,0)
 
 // Phase 2: Heartbeat

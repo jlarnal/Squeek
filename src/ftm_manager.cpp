@@ -22,6 +22,7 @@ static bool     s_busy              = false;
 
 // Responder calibration offset
 static int16_t  s_responderOffset   = 0;
+static bool     s_initialized       = false;
 
 // Current session context (for sending result back)
 static uint8_t  s_currentResponder[6] = {};
@@ -102,7 +103,12 @@ static void ftmEventHandler(void* arg, esp_event_base_t event_base,
             // Free the report data
             free(report->ftm_report_data);
         } else {
-            SqLog.printf("[ftm] FTM failed, status=%d\n", report->status);
+            static const char* ftm_status_names[] = {
+                "SUCCESS", "UNSUPPORTED", "CONF_REJECTED",
+                "NO_RESPONSE", "FAIL", "NO_VALID_MSMT", "USER_TERM"
+            };
+            const char* name = (report->status < 7) ? ftm_status_names[report->status] : "UNKNOWN";
+            SqLog.printf("[ftm] FTM failed, status=%d (%s)\n", report->status, name);
             s_ftmSuccess = false;
             s_ftmDistResult = -1.0f;
         }
@@ -114,19 +120,16 @@ static void ftmEventHandler(void* arg, esp_event_base_t event_base,
 // --- Public API ---
 
 void FtmManager::init() {
-    if (s_ftmSem == nullptr) {
+    if (!s_initialized) {
         s_ftmSem = xSemaphoreCreateBinary();
+        esp_read_mac(s_ownMac, ESP_MAC_WIFI_STA);
+        esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_FTM_REPORT,
+                                   &ftmEventHandler, NULL);
+        s_initialized = true;
     }
 
-    esp_read_mac(s_ownMac, ESP_MAC_WIFI_STA);
-
-    // Register FTM event handler
-    esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_FTM_REPORT,
-                               &ftmEventHandler, NULL);
-
-    // Set responder offset from NVS
+    // Always refresh in case NVS changed at runtime
     s_responderOffset = (int16_t)(uint32_t)NvsConfigManager::ftmResponderOffset_cm;
-
     SqLog.printf("[ftm] Initialized, responder offset=%d cm\n", s_responderOffset);
 }
 

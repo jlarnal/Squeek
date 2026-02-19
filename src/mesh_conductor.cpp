@@ -482,6 +482,21 @@ static void meshEventHandler(void* arg, esp_event_base_t event_base,
     case MESH_EVENT_STARTED:
         SqLog.println("[mesh] Mesh started");
         s_started = true;
+
+        // Enable FTM Responder on the mesh SoftAP so peers can range to us
+        {
+            wifi_config_t ap_cfg = {};
+            esp_wifi_get_config(WIFI_IF_AP, &ap_cfg);
+            ap_cfg.ap.ftm_responder = true;
+            esp_err_t ftm_err = esp_wifi_set_config(WIFI_IF_AP, &ap_cfg);
+            if (ftm_err == ESP_OK) {
+                SqLog.println("[mesh] FTM Responder enabled on SoftAP");
+            } else {
+                SqLog.printf("[mesh] WARNING: Failed to enable FTM Responder: %s\n",
+                    esp_err_to_name(ftm_err));
+            }
+        }
+
         // Start RX task
         xTaskCreateUniversal(meshRxTask, "meshRx", 4096, nullptr,
                              tskIDLE_PRIORITY + 2, nullptr, tskNO_AFFINITY);
@@ -502,6 +517,18 @@ static void meshEventHandler(void* arg, esp_event_base_t event_base,
             SqLog.println("[mesh] I am ROOT");
         }
         updateRtcMap();
+
+        // Send heartbeat immediately so the gateway adds us to PeerTable
+        // before the election completes (election can take 3s settle + 15s timeout)
+        if (!esp_mesh_is_root()) {
+            HeartbeatMsg hb;
+            hb.type = MSG_TYPE_HEARTBEAT;
+            esp_read_mac(hb.mac, ESP_MAC_WIFI_STA);
+            hb.battery_mv = (uint16_t)PowerManager::batteryMv();
+            hb.flags = 0;
+            esp_read_mac(hb.softap_mac, ESP_MAC_WIFI_SOFTAP);
+            MeshConductor::sendToRoot(&hb, sizeof(hb));
+        }
 
         // Start election after settle delay
         if (!s_electionDone) {

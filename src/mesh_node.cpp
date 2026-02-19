@@ -10,8 +10,9 @@
 #include <esp_wifi.h>
 #include <string.h>
 
-// Heartbeat timer
-static TimerHandle_t s_hbTimer = nullptr;
+// Heartbeat timers
+static TimerHandle_t s_hbTimer      = nullptr;
+static TimerHandle_t s_earlyHbTimer = nullptr;
 
 static void heartbeatTimerCb(TimerHandle_t t) {
     (void)t;
@@ -45,6 +46,13 @@ void MeshNode::begin() {
 
     // Send first heartbeat immediately
     heartbeatTimerCb(nullptr);
+
+    // Send a second heartbeat after 5s so the gateway gets it after election completes
+    if (s_earlyHbTimer == nullptr) {
+        s_earlyHbTimer = xTimerCreate("earlyHb", pdMS_TO_TICKS(5000),
+                                       pdFALSE, nullptr, heartbeatTimerCb);
+    }
+    xTimerStart(s_earlyHbTimer, 0);
 }
 
 void MeshNode::end() {
