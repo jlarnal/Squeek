@@ -16,6 +16,8 @@ enum MeshMsgType : uint8_t {
     MSG_TYPE_FTM_RESULT  = 0x23,   // initiator → gateway
     MSG_TYPE_FTM_CANCEL  = 0x24,   // gateway → pair (abort)
     MSG_TYPE_POS_UPDATE  = 0x30,   // gateway → all
+    MSG_TYPE_PEER_SYNC   = 0x31,   // gateway → all (peer table broadcast)
+    MSG_TYPE_NOMINATE    = 0x40,   // peer → gateway (request gateway role)
 };
 
 // --- Election score broadcast packet ---
@@ -84,6 +86,30 @@ struct __attribute__((packed)) PosUpdateMsg {
     // followed by count × PosUpdateEntry
 };
 
+// --- Peer sync message (gateway → all) ---
+
+struct __attribute__((packed)) PeerSyncEntry {
+    uint8_t  mac[6];
+    uint8_t  softap_mac[6];
+    uint16_t battery_mv;
+    uint8_t  flags;
+};
+// 15 bytes per entry
+
+struct __attribute__((packed)) PeerSyncMsg {
+    uint8_t type;    // MSG_TYPE_PEER_SYNC
+    uint8_t count;
+    // followed by count × PeerSyncEntry
+};
+// 2 + 16×15 = 242 bytes max (fits 256-byte rx_buf)
+
+// --- Nominate message (peer → gateway) ---
+
+struct __attribute__((packed)) NominateMsg {
+    uint8_t type;    // MSG_TYPE_NOMINATE
+    uint8_t mac[6];  // STA MAC of node requesting gateway role
+};
+
 // --- IMeshRole abstract interface ---
 
 class IMeshRole {
@@ -146,6 +172,14 @@ public:
     static esp_err_t sendToRoot(const void* data, uint16_t len);
     static esp_err_t sendToNode(const uint8_t* sta_mac, const void* data, uint16_t len);
     static esp_err_t broadcastToAll(const void* data, uint16_t len);
+
+    // Peer shadow (non-gateway nodes)
+    static void printPeerShadow();
+    static uint8_t peerShadowCount();
+
+    // Role nomination
+    static void nominateNode(const uint8_t* sta_mac);  // gateway only
+    static void stepDown();                              // gateway only
 
     // Debug
     static void forceReelection();

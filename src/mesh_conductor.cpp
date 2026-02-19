@@ -29,6 +29,10 @@ static uint8_t     s_meshId[6]      = { 0x53, 0x51, 0x45, 0x45, 0x4B, 0x00 }; //
 static Gateway     s_gateway;
 static MeshNode    s_meshNode;
 
+// Peer shadow (non-gateway nodes receive this from gateway)
+static PeerSyncEntry s_peerShadow[MESH_MAX_NODES];
+static uint8_t       s_peerShadowCount = 0;
+
 // Election state
 static uint8_t     s_parentRetries  = 0;
 static TimerHandle_t s_electTimer   = nullptr;
@@ -422,6 +426,27 @@ static void meshRxTask(void* pvParameters) {
                 SqLog.printf("[mesh] POS_UPDATE: %u nodes, %uD\n", pos->count, pos->dimension);
                 // Nodes could store their own position from this
             }
+            else if (msgType == MSG_TYPE_PEER_SYNC && data.size >= sizeof(PeerSyncMsg)) {
+                PeerSyncMsg* sync = (PeerSyncMsg*)rx_buf;
+                uint8_t count = sync->count;
+                if (count > MESH_MAX_NODES) count = MESH_MAX_NODES;
+                uint16_t expected = sizeof(PeerSyncMsg) + count * sizeof(PeerSyncEntry);
+                if (data.size >= expected) {
+                    PeerSyncEntry* entries = (PeerSyncEntry*)(rx_buf + sizeof(PeerSyncMsg));
+                    memcpy(s_peerShadow, entries, count * sizeof(PeerSyncEntry));
+                    s_peerShadowCount = count;
+                    SqLog.printf("[mesh] PEER_SYNC received: %u entries\n", count);
+                }
+            }
+            else if (msgType == MSG_TYPE_NOMINATE && data.size >= sizeof(NominateMsg)) {
+                NominateMsg* nom = (NominateMsg*)rx_buf;
+                if (s_role && s_role->isGateway()) {
+                    SqLog.printf("[mesh] NOMINATE received from %02X:%02X:%02X:%02X:%02X:%02X\n",
+                        nom->mac[0], nom->mac[1], nom->mac[2],
+                        nom->mac[3], nom->mac[4], nom->mac[5]);
+                    MeshConductor::nominateNode(nom->mac);
+                }
+            }
         }
 
         // Reset buffer for next receive
@@ -617,9 +642,13 @@ static void meshEventHandler(void* arg, esp_event_base_t event_base,
         }
         break;
 
-    case MESH_EVENT_ROOT_SWITCH_REQ:
-        SqLog.println("[mesh] Root switch requested — accepting");
+    case MESH_EVENT_ROOT_SWITCH_REQ: {
+        SqLog.println("[mesh] Root switch requested — accepting, becoming gateway");
+        uint8_t own_mac[6];
+        esp_read_mac(own_mac, ESP_MAC_WIFI_STA);
+        assignRole(own_mac);
         break;
+    }
 
     default:
         SqLog.printf("[mesh] Event %ld\n", event_id);
@@ -793,6 +822,82 @@ void MeshConductor::printStatus() {
     if (s_role) {
         s_role->printStatus();
     }
+}
+
+void MeshConductor::printPeerShadow() {
+    uint8_t own_mac[6];
+    esp_read_mac(own_mac, ESP_MAC_WIFI_STA);
+
+    Serial.println("=== Peer Table (synced from gateway) ===");
+    Serial.printf("Entries: %u\n", s_peerShadowCount);
+
+    for (uint8_t i = 0; i < s_peerShadowCount; i++) {
+        PeerSyncEntry* e = &s_peerShadow[i];
+        const char* status = (e->flags & PEER_STATUS_DEAD) ? "DEAD " :
+                             (e->flags & PEER_STATUS_SLEEPING) ? "SLEEP" : "ALIVE";
+        bool isGw   = (i == 0);
+        bool isSelf = (memcmp(e->mac, own_mac, 6) == 0);
+        const char* suffix = (isGw && isSelf) ? " <-- Gateway, this" :
+                             isGw             ? " <-- Gateway" :
+                             isSelf           ? " <-- this" : "";
+        Serial.printf("  [%u] %02X:%02X:%02X:%02X:%02X:%02X  bat=%umV  %s%s\n",
+            i, e->mac[0], e->mac[1], e->mac[2], e->mac[3], e->mac[4], e->mac[5],
+            e->battery_mv, status, suffix);
+    }
+}
+
+uint8_t MeshConductor::peerShadowCount() {
+    return s_peerShadowCount;
+}
+
+void MeshConductor::nominateNode(const uint8_t* sta_mac) {
+    if (!s_role || !s_role->isGateway()) {
+        SqLog.println("[mesh] nominateNode: not gateway, ignoring");
+        return;
+    }
+
+    SqLog.printf("[mesh] Waiving root to nominee %02X:%02X:%02X:%02X:%02X:%02X\n",
+        sta_mac[0], sta_mac[1], sta_mac[2], sta_mac[3], sta_mac[4], sta_mac[5]);
+
+    mesh_vote_t vote;
+    vote.percentage = 0.8f;
+    vote.is_rc_specified = true;
+    memcpy(vote.config.rc_addr.addr, sta_mac, 6);
+    esp_mesh_waive_root(&vote, MESH_VOTE_REASON_ROOT_INITIATED);
+
+    assignRole(sta_mac);  // step down to node
+}
+
+void MeshConductor::stepDown() {
+    if (!s_role || !s_role->isGateway()) {
+        Serial.println("Not gateway — cannot step down.");
+        return;
+    }
+
+    // Find best alive candidate (highest battery_mv, skip self at slot 0)
+    uint8_t bestIdx = 0;
+    uint16_t bestBat = 0;
+    uint8_t count = PeerTable::peerCount();
+    for (uint8_t i = 1; i < count; i++) {
+        PeerEntry* e = PeerTable::getEntryByIndex(i);
+        if (!e || (e->flags & PEER_STATUS_DEAD)) continue;
+        if (e->battery_mv > bestBat) {
+            bestBat = e->battery_mv;
+            bestIdx = i;
+        }
+    }
+
+    if (bestIdx == 0) {
+        Serial.println("No alive peers to hand off gateway role.");
+        return;
+    }
+
+    PeerEntry* candidate = PeerTable::getEntryByIndex(bestIdx);
+    Serial.printf("Stepping down, nominating %02X:%02X:%02X:%02X:%02X:%02X (%u mV)\n",
+        candidate->mac[0], candidate->mac[1], candidate->mac[2],
+        candidate->mac[3], candidate->mac[4], candidate->mac[5], candidate->battery_mv);
+
+    nominateNode(candidate->mac);
 }
 
 void MeshConductor::forceReelection() {

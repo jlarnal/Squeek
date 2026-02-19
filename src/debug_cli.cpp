@@ -12,6 +12,7 @@
 #include "sq_log.h"
 #include <Arduino.h>
 #include <esp_system.h>
+#include <esp_mac.h>
 #include <WiFi.h>
 #include <string.h>
 
@@ -30,6 +31,7 @@ static void cmd_sweep(const char* args);
 static void cmd_solve(const char* args);
 static void cmd_broadcast(const char* args);
 static void cmd_quiet(const char* args);
+static void cmd_mode(const char* args);
 static void cmd_status(const char* args);
 static void cmd_reboot(const char* args);
 
@@ -49,7 +51,8 @@ static const CliCommand s_commands[] = {
     { "elect",     cmd_elect,     "Force gateway re-election" },
     { "rtc",       cmd_rtc,       "RTC memory write/readback test" },
     { "sleep",     cmd_sleep,     "Light sleep [seconds] (default 5)" },
-    { "peers",     cmd_peers,     "Show PeerTable (gateway only)" },
+    { "peers",     cmd_peers,     "Show PeerTable (synced from gateway)" },
+    { "mode",      cmd_mode,      "Set role: 'mode gateway' or 'mode peer'" },
     { "ftm",       cmd_ftm,       "FTM single-shot to first peer" },
     { "sweep",     cmd_sweep,     "FTM full sweep, print distance matrix" },
     { "solve",     cmd_solve,     "Run MDS position solver" },
@@ -218,11 +221,43 @@ static void cmd_peers(const char* args) {
         Serial.println("Mesh not connected. Run 'mesh' first.");
         return;
     }
-    if (!MeshConductor::isGateway()) {
-        Serial.println("Not gateway -- PeerTable only runs on gateway.");
+    if (MeshConductor::isGateway()) {
+        PeerTable::print();
+    } else {
+        MeshConductor::printPeerShadow();
+    }
+}
+
+static void cmd_mode(const char* args) {
+    if (!args || !*args) {
+        Serial.println("Usage: mode gateway | mode peer");
         return;
     }
-    PeerTable::print();
+
+    if (!MeshConductor::isConnected()) {
+        Serial.println("Mesh not connected.");
+        return;
+    }
+
+    if (strcasecmp(args, "gateway") == 0) {
+        if (MeshConductor::isGateway()) {
+            Serial.println("Already gateway.");
+            return;
+        }
+        Serial.println("Requesting gateway role...");
+        NominateMsg msg;
+        msg.type = MSG_TYPE_NOMINATE;
+        esp_read_mac(msg.mac, ESP_MAC_WIFI_STA);
+        MeshConductor::sendToRoot(&msg, sizeof(msg));
+    } else if (strcasecmp(args, "peer") == 0) {
+        if (!MeshConductor::isGateway()) {
+            Serial.println("Already a peer node.");
+            return;
+        }
+        MeshConductor::stepDown();
+    } else {
+        Serial.println("Usage: mode gateway | mode peer");
+    }
 }
 
 static void cmd_ftm(const char* args) {

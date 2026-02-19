@@ -14,6 +14,7 @@ static const char* TAG = "ptable";
 static PeerEntry  s_entries[MESH_MAX_NODES];
 static uint8_t    s_count = 0;   // total slots in use (index 0 = gateway self)
 static TimerHandle_t s_stalenessTimer = nullptr;
+static uint32_t   s_lastBroadcastHash = 0;  // change-detection for broadcastSync
 
 // --- Helpers ---
 
@@ -84,6 +85,9 @@ void PeerTable::shutdown() {
 void PeerTable::updateFromHeartbeat(const uint8_t* mac, uint16_t battery_mv,
                                      uint8_t flags, const uint8_t* softap_mac) {
     int8_t idx = findByMac(mac);
+    bool newPeer = false;
+    bool wasDeadNowAlive = false;
+
     if (idx < 0) {
         // New peer — add to table
         if (s_count >= MESH_MAX_NODES) {
@@ -93,8 +97,11 @@ void PeerTable::updateFromHeartbeat(const uint8_t* mac, uint16_t battery_mv,
         idx = s_count++;
         clearEntry(&s_entries[idx]);
         memcpy(s_entries[idx].mac, mac, 6);
+        newPeer = true;
         SqLog.printf("[ptable] New peer at slot %d: %02X:%02X:%02X:%02X:%02X:%02X\n",
             idx, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    } else {
+        wasDeadNowAlive = (s_entries[idx].flags & PEER_STATUS_DEAD) != 0;
     }
 
     s_entries[idx].battery_mv = battery_mv;
@@ -104,6 +111,10 @@ void PeerTable::updateFromHeartbeat(const uint8_t* mac, uint16_t battery_mv,
 
     if (softap_mac) {
         memcpy(s_entries[idx].softap_mac, softap_mac, 6);
+    }
+
+    if (newPeer || wasDeadNowAlive) {
+        broadcastSync();
     }
 }
 
@@ -118,15 +129,21 @@ void PeerTable::scanStaleness() {
                       * (uint32_t)NvsConfigManager::heartbeatStaleMultiplier
                       * 1000;
 
+    bool anyChanged = false;
     for (uint8_t i = 1; i < s_count; i++) {  // skip self (slot 0)
         if (s_entries[i].flags & PEER_STATUS_DEAD)
             continue;
 
         if ((now - s_entries[i].last_seen_ms) > stale_ms) {
             s_entries[i].flags = PEER_STATUS_DEAD;
+            anyChanged = true;
             SqLog.printf("[ptable] Peer slot %d DEAD (stale %lu ms)\n",
                 i, now - s_entries[i].last_seen_ms);
         }
+    }
+
+    if (anyChanged) {
+        broadcastSync();
     }
 }
 
@@ -204,18 +221,60 @@ uint8_t PeerTable::getDimension() {
     return 3;
 }
 
+// --- Sync broadcast ---
+
+static uint32_t computeSyncHash() {
+    uint32_t h = (uint32_t)s_count;
+    for (uint8_t i = 0; i < s_count; i++) {
+        h ^= ((uint32_t)s_entries[i].flags << (i & 0x1F));
+    }
+    return h;
+}
+
+void PeerTable::broadcastSync() {
+    uint32_t hash = computeSyncHash();
+    if (hash == s_lastBroadcastHash) return;
+    s_lastBroadcastHash = hash;
+
+    // Build PeerSyncMsg + entries into a stack buffer
+    uint8_t buf[2 + MESH_MAX_NODES * sizeof(PeerSyncEntry)];
+    PeerSyncMsg* msg = (PeerSyncMsg*)buf;
+    msg->type = MSG_TYPE_PEER_SYNC;
+    msg->count = s_count;
+
+    PeerSyncEntry* entries = (PeerSyncEntry*)(buf + sizeof(PeerSyncMsg));
+    for (uint8_t i = 0; i < s_count; i++) {
+        memcpy(entries[i].mac, s_entries[i].mac, 6);
+        memcpy(entries[i].softap_mac, s_entries[i].softap_mac, 6);
+        entries[i].battery_mv = s_entries[i].battery_mv;
+        entries[i].flags = s_entries[i].flags;
+    }
+
+    uint16_t totalLen = (uint16_t)(sizeof(PeerSyncMsg) + s_count * sizeof(PeerSyncEntry));
+    MeshConductor::broadcastToAll(buf, totalLen);
+    SqLog.printf("[ptable] Broadcast peer sync (%u entries)\n", s_count);
+}
+
 void PeerTable::print() {
+    uint8_t own_mac[6];
+    esp_read_mac(own_mac, ESP_MAC_WIFI_STA);
+
     SqLog.println("=== Peer Table ===");
     SqLog.printf("Entries: %u, Alive: %u, Dimension: %uD\n",
         s_count, alivePeerCount(), getDimension());
 
     for (uint8_t i = 0; i < s_count; i++) {
         PeerEntry* e = &s_entries[i];
-        const char* status = (e->flags & PEER_STATUS_DEAD) ? "DEAD" :
+        const char* status = (e->flags & PEER_STATUS_DEAD) ? "DEAD " :
                              (e->flags & PEER_STATUS_SLEEPING) ? "SLEEP" : "ALIVE";
-        SqLog.printf("  [%u] %02X:%02X:%02X:%02X:%02X:%02X  bat=%umV  %s  pos=(%.0f,%.0f,%.0f) conf=%.2f\n",
+        bool isGw   = (i == 0);
+        bool isSelf = (memcmp(e->mac, own_mac, 6) == 0);
+        const char* suffix = (isGw && isSelf) ? " <-- Gateway, this" :
+                             isGw             ? " <-- Gateway" :
+                             isSelf           ? " <-- this" : "";
+        SqLog.printf("  [%u] %02X:%02X:%02X:%02X:%02X:%02X  bat=%umV  %s  pos=(%6.0f,%6.0f,%6.0f) conf=%.2f%s\n",
             i, e->mac[0], e->mac[1], e->mac[2], e->mac[3], e->mac[4], e->mac[5],
             e->battery_mv, status, e->position[0], e->position[1], e->position[2],
-            e->confidence);
+            e->confidence, suffix);
     }
 }

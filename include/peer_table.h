@@ -53,6 +53,9 @@ public:
     // Dimension tracking
     static uint8_t getDimension();  // 1, 2, or 3
 
+    // Sync to peers
+    static void broadcastSync();
+
     // Debug
     static void print();
 
