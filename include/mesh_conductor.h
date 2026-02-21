@@ -18,6 +18,9 @@ enum MeshMsgType : uint8_t {
     MSG_TYPE_POS_UPDATE  = 0x30,   // gateway → all
     MSG_TYPE_PEER_SYNC   = 0x31,   // gateway → all (peer table broadcast)
     MSG_TYPE_NOMINATE    = 0x40,   // peer → gateway (request gateway role)
+    MSG_TYPE_CONFIG_REQ  = 0x50,   // any node → target node
+    MSG_TYPE_CONFIG_RESP = 0x51,   // target node → requester
+    MSG_TYPE_ROLE_CHANGE = 0x60,   // gateway → all (new gateway MAC)
 };
 
 // --- Election score broadcast packet ---
@@ -110,6 +113,13 @@ struct __attribute__((packed)) NominateMsg {
     uint8_t mac[6];  // STA MAC of node requesting gateway role
 };
 
+// --- Role change message (gateway → all) ---
+
+struct __attribute__((packed)) RoleChangeMsg {
+    uint8_t type;        // MSG_TYPE_ROLE_CHANGE
+    uint8_t new_gw[6];   // STA MAC of new gateway
+};
+
 // --- IMeshRole abstract interface ---
 
 class IMeshRole {
@@ -176,10 +186,19 @@ public:
     // Peer shadow (non-gateway nodes)
     static void printPeerShadow();
     static uint8_t peerShadowCount();
+    static const PeerSyncEntry* peerShadowEntries();
+
+    // Gateway MAC tracking (for heartbeat routing)
+    static const uint8_t* gatewayMac();
+    static void setGatewayMac(const uint8_t* mac);
 
     // Role nomination
     static void nominateNode(const uint8_t* sta_mac);  // gateway only
     static void stepDown();                              // gateway only
+
+    // Remote config
+    static bool sendConfigReq(const uint8_t* sta_mac, const char* json, uint8_t reqId);
+    static bool waitConfigResp(char* outBuf, size_t bufSize, uint32_t timeout_ms);
 
     // Debug
     static void forceReelection();

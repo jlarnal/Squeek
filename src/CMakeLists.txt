@@ -8,6 +8,7 @@ idf_component_register(SRCS
     "mesh_node.cpp"
     "debug_cli.cpp"
     "nvs_config.cpp"
+    "nvs_config_registry.cpp"
     "peer_table.cpp"
     "ftm_manager.cpp"
     "ftm_scheduler.cpp"

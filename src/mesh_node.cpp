@@ -24,7 +24,15 @@ static void heartbeatTimerCb(TimerHandle_t t) {
     hb.flags = 0;  // awake
     esp_read_mac(hb.softap_mac, ESP_MAC_WIFI_SOFTAP);
 
-    MeshConductor::sendToRoot(&hb, sizeof(hb));
+    // Route heartbeat to logical gateway (may differ from ESP-IDF root after role transfer)
+    const uint8_t* gw = MeshConductor::gatewayMac();
+    static const uint8_t zero[6] = {0};
+    if (memcmp(gw, zero, 6) != 0) {
+        MeshConductor::sendToNode(gw, &hb, sizeof(hb));
+    } else {
+        // Gateway MAC not yet known (pre-election) — fall back to ESP-IDF root
+        MeshConductor::sendToRoot(&hb, sizeof(hb));
+    }
 }
 
 void MeshNode::begin() {

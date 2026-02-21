@@ -221,6 +221,38 @@ uint8_t PeerTable::getDimension() {
     return 3;
 }
 
+// --- Seed from shadow (role transfer) ---
+
+void PeerTable::seedFromShadow(const PeerSyncEntry* entries, uint8_t count) {
+    // PeerTable::init() was already called by Gateway::begin() and created slot 0 = self.
+    // Now populate remaining slots from the shadow data (skipping our own MAC).
+    uint8_t own_mac[6];
+    esp_read_mac(own_mac, ESP_MAC_WIFI_STA);
+
+    for (uint8_t i = 0; i < count && s_count < MESH_MAX_NODES; i++) {
+        if (memcmp(entries[i].mac, own_mac, 6) == 0) continue;  // skip self
+        if (entries[i].flags & PEER_STATUS_DEAD) continue;       // skip dead
+
+        int8_t idx = findByMac(entries[i].mac);
+        if (idx >= 0) continue;  // already present
+
+        idx = s_count++;
+        clearEntry(&s_entries[idx]);
+        memcpy(s_entries[idx].mac, entries[i].mac, 6);
+        memcpy(s_entries[idx].softap_mac, entries[i].softap_mac, 6);
+        s_entries[idx].battery_mv = entries[i].battery_mv;
+        s_entries[idx].last_seen_ms = millis();
+        s_entries[idx].flags = PEER_STATUS_ALIVE;
+
+        SqLog.printf("[ptable] Seeded slot %d from shadow: %02X:%02X:%02X:%02X:%02X:%02X\n",
+            idx, entries[i].mac[0], entries[i].mac[1], entries[i].mac[2],
+            entries[i].mac[3], entries[i].mac[4], entries[i].mac[5]);
+    }
+
+    SqLog.printf("[ptable] Seeded %u total entries from shadow\n", s_count);
+    broadcastSync();
+}
+
 // --- Sync broadcast ---
 
 static uint32_t computeSyncHash() {

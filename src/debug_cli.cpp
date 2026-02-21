@@ -1,6 +1,7 @@
 #include "debug_cli.h"
 #include "bsp.hpp"
 #include "nvs_config.h"
+#include "nvs_config_registry.h"
 #include "led_driver.h"
 #include "power_manager.h"
 #include "mesh_conductor.h"
@@ -11,6 +12,7 @@
 #include "position_solver.h"
 #include "sq_log.h"
 #include <Arduino.h>
+#include <ArduinoJson.h>
 #include <esp_system.h>
 #include <esp_mac.h>
 #include <WiFi.h>
@@ -31,6 +33,7 @@ static void cmd_sweep(const char* args);
 static void cmd_solve(const char* args);
 static void cmd_broadcast(const char* args);
 static void cmd_quiet(const char* args);
+static void cmd_config(const char* args);
 static void cmd_mode(const char* args);
 static void cmd_status(const char* args);
 static void cmd_reboot(const char* args);
@@ -52,6 +55,7 @@ static const CliCommand s_commands[] = {
     { "rtc",       cmd_rtc,       "RTC memory write/readback test" },
     { "sleep",     cmd_sleep,     "Light sleep [seconds] (default 5)" },
     { "peers",     cmd_peers,     "Show PeerTable (synced from gateway)" },
+    { "config",    cmd_config,    "Get/set NVS config locally or on peers" },
     { "mode",      cmd_mode,      "Set role: 'mode gateway' or 'mode peer'" },
     { "ftm",       cmd_ftm,       "FTM single-shot to first peer" },
     { "sweep",     cmd_sweep,     "FTM full sweep, print distance matrix" },
@@ -228,6 +232,281 @@ static void cmd_peers(const char* args) {
     }
 }
 
+static uint8_t s_configReqId = 0;
+
+static void configDumpLocal() {
+    JsonDocument doc;
+    uint8_t own_mac[6];
+    esp_read_mac(own_mac, ESP_MAC_WIFI_STA);
+    char macStr[18];
+    snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+        own_mac[0], own_mac[1], own_mac[2],
+        own_mac[3], own_mac[4], own_mac[5]);
+    doc["mac"] = macStr;
+    configBuildJson(doc, nullptr, 0);
+    serializeJsonPretty(doc, Serial);
+    Serial.println();
+}
+
+static void configSetLocal(const char* args) {
+    // Parse key=val pairs from args
+    char buf[128];
+    strncpy(buf, args, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+
+    JsonDocument doc;
+    char* token = strtok(buf, " ");
+    while (token) {
+        char* eq = strchr(token, '=');
+        if (eq) {
+            *eq = '\0';
+            const char* key = token;
+            const char* val = eq + 1;
+            const ConfigField* f = configLookup(key);
+            if (!f) {
+                Serial.printf("Unknown field: %s\n", key);
+            } else if (f->type == CFG_BOOL) {
+                doc[key] = (strcmp(val, "1") == 0 || strcasecmp(val, "true") == 0);
+            } else if (f->type == CFG_FLOAT) {
+                doc[key] = (float)atof(val);
+            } else {
+                doc[key] = (uint32_t)strtoul(val, nullptr, 0);
+            }
+        } else {
+            Serial.printf("Invalid pair (expected key=val): %s\n", token);
+        }
+        token = strtok(nullptr, " ");
+    }
+
+    uint8_t applied = configApplyJson(doc.as<JsonObjectConst>());
+    Serial.printf("Applied %u field(s) locally.\n", applied);
+    configDumpLocal();
+}
+
+static void configRemoteGetSet(bool isSet, const char* target, const char* rest) {
+    if (!MeshConductor::isConnected()) {
+        Serial.println("Mesh not connected.");
+        return;
+    }
+
+    // Build JSON request
+    JsonDocument reqDoc;
+    if (isSet) {
+        reqDoc["action"] = "set";
+        // Parse key=val pairs from rest
+        if (rest && *rest) {
+            char buf[128];
+            strncpy(buf, rest, sizeof(buf) - 1);
+            buf[sizeof(buf) - 1] = '\0';
+            char* token = strtok(buf, " ");
+            while (token) {
+                char* eq = strchr(token, '=');
+                if (eq) {
+                    *eq = '\0';
+                    const char* key = token;
+                    const char* val = eq + 1;
+                    const ConfigField* f = configLookup(key);
+                    if (!f) {
+                        Serial.printf("Unknown field: %s\n", key);
+                    } else if (f->type == CFG_BOOL) {
+                        reqDoc[key] = (strcmp(val, "1") == 0 || strcasecmp(val, "true") == 0);
+                    } else if (f->type == CFG_FLOAT) {
+                        reqDoc[key] = (float)atof(val);
+                    } else {
+                        reqDoc[key] = (uint32_t)strtoul(val, nullptr, 0);
+                    }
+                }
+                token = strtok(nullptr, " ");
+            }
+        }
+    } else {
+        reqDoc["action"] = "get";
+        // Parse optional field names from rest
+        if (rest && *rest) {
+            JsonArray arr = reqDoc["fields"].to<JsonArray>();
+            char buf[128];
+            strncpy(buf, rest, sizeof(buf) - 1);
+            buf[sizeof(buf) - 1] = '\0';
+            char* token = strtok(buf, " ");
+            while (token) {
+                arr.add(token);
+                token = strtok(nullptr, " ");
+            }
+        }
+    }
+
+    char reqJson[256];
+    serializeJson(reqDoc, reqJson, sizeof(reqJson));
+
+    // Determine target peer(s)
+    bool allPeers = (strcmp(target, "*") == 0);
+
+    if (allPeers) {
+        // Include local node in * operations
+        if (isSet) {
+            configApplyJson(reqDoc.as<JsonObjectConst>());
+        }
+        // Show local config (filtered by requested fields for get, full dump for set)
+        {
+            JsonDocument localDoc;
+            uint8_t own_mac[6];
+            esp_read_mac(own_mac, ESP_MAC_WIFI_STA);
+            char macStr[18];
+            snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+                own_mac[0], own_mac[1], own_mac[2],
+                own_mac[3], own_mac[4], own_mac[5]);
+            localDoc["mac"] = macStr;
+            if (!isSet && rest && *rest) {
+                // Parse field names for filtered get
+                char fbuf[128];
+                strncpy(fbuf, rest, sizeof(fbuf) - 1);
+                fbuf[sizeof(fbuf) - 1] = '\0';
+                const char* fptrs[16];
+                uint8_t fc = 0;
+                char* tok = strtok(fbuf, " ");
+                while (tok && fc < 16) { fptrs[fc++] = tok; tok = strtok(nullptr, " "); }
+                configBuildJson(localDoc, fptrs, fc);
+            } else {
+                configBuildJson(localDoc, nullptr, 0);
+            }
+            Serial.print("[local] ");
+            serializeJson(localDoc, Serial);
+            Serial.println();
+        }
+
+        uint8_t count = MeshConductor::isGateway() ? PeerTable::peerCount() : MeshConductor::peerShadowCount();
+        uint8_t own_mac[6];
+        esp_read_mac(own_mac, ESP_MAC_WIFI_STA);
+
+        for (uint8_t i = 0; i < count; i++) {
+            PeerEntry* e = MeshConductor::isGateway() ? PeerTable::getEntryByIndex(i) : nullptr;
+            if (!e) continue;
+            if (memcmp(e->mac, own_mac, 6) == 0) continue;
+            if (e->flags & PEER_STATUS_DEAD) continue;
+
+            uint8_t reqId = ++s_configReqId;
+            Serial.printf("[%u] Requesting %02X:%02X... ", i, e->mac[4], e->mac[5]);
+            if (MeshConductor::sendConfigReq(e->mac, reqJson, reqId)) {
+                char resp[480];
+                if (MeshConductor::waitConfigResp(resp, sizeof(resp), 5000)) {
+                    Serial.println(resp);
+                } else {
+                    Serial.println("TIMEOUT");
+                }
+            } else {
+                Serial.println("SEND FAILED");
+            }
+        }
+    } else {
+        int slot = atoi(target);
+        PeerEntry* e = MeshConductor::isGateway() ? PeerTable::getEntryByIndex((uint8_t)slot) : nullptr;
+        if (!e) {
+            Serial.printf("Peer slot %d not found.\n", slot);
+            return;
+        }
+        if (e->flags & PEER_STATUS_DEAD) {
+            Serial.printf("Peer slot %d is dead.\n", slot);
+            return;
+        }
+
+        uint8_t reqId = ++s_configReqId;
+        Serial.printf("Requesting slot %d (%02X:%02X:%02X:%02X:%02X:%02X)...\n",
+            slot, e->mac[0], e->mac[1], e->mac[2], e->mac[3], e->mac[4], e->mac[5]);
+
+        if (MeshConductor::sendConfigReq(e->mac, reqJson, reqId)) {
+            char resp[480];
+            if (MeshConductor::waitConfigResp(resp, sizeof(resp), 5000)) {
+                Serial.println(resp);
+            } else {
+                Serial.println("TIMEOUT — no response from peer.");
+            }
+        } else {
+            Serial.println("Failed to send config request.");
+        }
+    }
+}
+
+static void cmd_config(const char* args) {
+    if (!args || !*args) {
+        configDumpLocal();
+        return;
+    }
+
+    // Tokenize: first word is subcommand
+    char buf[128];
+    strncpy(buf, args, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+
+    char* subcmd = buf;
+    char* rest = nullptr;
+    for (int i = 0; buf[i]; i++) {
+        if (buf[i] == ' ') {
+            buf[i] = '\0';
+            rest = &buf[i + 1];
+            break;
+        }
+    }
+
+    if (strcasecmp(subcmd, "list") == 0) {
+        configListFields(Serial);
+        return;
+    }
+
+    if (strcasecmp(subcmd, "get") == 0) {
+        if (!rest || !*rest) {
+            Serial.println("Usage: config get <slot|*> [field1 field2...]");
+            return;
+        }
+        // Extract target (first token of rest)
+        char* target = rest;
+        char* fields = nullptr;
+        for (int i = 0; rest[i]; i++) {
+            if (rest[i] == ' ') {
+                rest[i] = '\0';
+                fields = &rest[i + 1];
+                break;
+            }
+        }
+        configRemoteGetSet(false, target, fields);
+        return;
+    }
+
+    if (strcasecmp(subcmd, "set") == 0) {
+        if (!rest || !*rest) {
+            Serial.println("Usage: config set <slot|*|local> key=val [key=val...]");
+            return;
+        }
+        // Extract target
+        char* target = rest;
+        char* pairs = nullptr;
+        for (int i = 0; rest[i]; i++) {
+            if (rest[i] == ' ') {
+                rest[i] = '\0';
+                pairs = &rest[i + 1];
+                break;
+            }
+        }
+
+        if (strcasecmp(target, "local") == 0) {
+            if (pairs && *pairs) {
+                configSetLocal(pairs);
+            } else {
+                Serial.println("Usage: config set local key=val [key=val...]");
+            }
+            return;
+        }
+
+        if (!pairs || !*pairs) {
+            Serial.println("Usage: config set <slot|*> key=val [key=val...]");
+            return;
+        }
+        configRemoteGetSet(true, target, pairs);
+        return;
+    }
+
+    Serial.println("Usage: config [list|get <slot|*> [fields...]|set <slot|*|local> key=val...]");
+}
+
 static void cmd_mode(const char* args) {
     if (!args || !*args) {
         Serial.println("Usage: mode gateway | mode peer");
@@ -245,15 +524,25 @@ static void cmd_mode(const char* args) {
             return;
         }
         Serial.println("Requesting gateway role...");
+        Serial.flush();
         NominateMsg msg;
         msg.type = MSG_TYPE_NOMINATE;
         esp_read_mac(msg.mac, ESP_MAC_WIFI_STA);
-        MeshConductor::sendToRoot(&msg, sizeof(msg));
+        // Send to logical gateway (may differ from ESP-IDF root after role transfer)
+        const uint8_t* gw = MeshConductor::gatewayMac();
+        static const uint8_t zero[6] = {0};
+        if (memcmp(gw, zero, 6) != 0) {
+            MeshConductor::sendToNode(gw, &msg, sizeof(msg));
+        } else {
+            MeshConductor::sendToRoot(&msg, sizeof(msg));
+        }
     } else if (strcasecmp(args, "peer") == 0) {
         if (!MeshConductor::isGateway()) {
             Serial.println("Already a peer node.");
             return;
         }
+        Serial.println("Stepping down from gateway...");
+        Serial.flush();
         MeshConductor::stepDown();
     } else {
         Serial.println("Usage: mode gateway | mode peer");
@@ -278,7 +567,7 @@ static void cmd_ftm(const char* args) {
                 peer->softap_mac[0], peer->softap_mac[1], peer->softap_mac[2],
                 peer->softap_mac[3], peer->softap_mac[4], peer->softap_mac[5]);
 
-            float dist = FtmManager::initiateSession(peer->softap_mac, MESH_CHANNEL, 8);
+            float dist = FtmManager::initiateSession(peer->softap_mac, MESH_CHANNEL, (uint8_t)(uint32_t)NvsConfigManager::ftmSamplesPerPair);
             if (dist >= 0) {
                 Serial.printf("SUCCESS: distance = %.1f cm (%.2f m)\n", dist, dist / 100.0f);
             } else {

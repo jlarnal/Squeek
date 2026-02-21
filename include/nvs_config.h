@@ -61,7 +61,7 @@ inline constexpr int16_t  DEFAULT_FTM_RESP_OFS_CM    = NVS_DEFAULT_FTM_RESP_OFS_
 // --- Compile-time settings hash (FNV-1a) ---
 //     Changes automatically when any default value above is modified.
 
-namespace detail {
+namespace nvs_detail {
     constexpr uint64_t FNV_OFFSET = 14695981039346656037ULL;
     constexpr uint64_t FNV_PRIME  = 1099511628211ULL;
 
@@ -91,7 +91,7 @@ namespace detail {
     }
 }
 
-namespace detail {
+namespace nvs_detail {
     constexpr uint64_t computeSettingsHash() {
         uint64_t h = FNV_OFFSET;
         h = fnvBool(h,  DEFAULT_LEDS_ENABLED);
@@ -119,7 +119,7 @@ namespace detail {
     }
 }
 
-inline constexpr uint64_t SETTINGS_HASH = detail::computeSettingsHash();
+inline constexpr uint64_t SETTINGS_HASH = nvs_detail::computeSettingsHash();
 
 // --- NvsConfigManager ---
 

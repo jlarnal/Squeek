@@ -143,10 +143,19 @@ float FtmManager::initiateSession(const uint8_t* target_ap_mac, uint8_t channel,
     s_ftmSuccess = false;
     s_ftmDistResult = -1.0f;
 
+    // frm_count valid values per ESP-IDF: 0 (no pref), 16, 24, 32, 64
+    // Snap to nearest valid value
+    uint8_t frm;
+    if      (samples == 0)  frm = 0;
+    else if (samples <= 16) frm = 16;
+    else if (samples <= 24) frm = 24;
+    else if (samples <= 32) frm = 32;
+    else                    frm = 64;
+
     wifi_ftm_initiator_cfg_t cfg = {};
     memcpy(cfg.resp_mac, target_ap_mac, 6);
     cfg.channel = channel;
-    cfg.frm_count = (samples > 0) ? samples : 8;
+    cfg.frm_count = frm;
     cfg.burst_period = 2;  // 200ms burst period
 
     SqLog.printf("[ftm] Initiating to %02X:%02X:%02X:%02X:%02X:%02X ch=%d frames=%d\n",

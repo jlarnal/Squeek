@@ -4,6 +4,9 @@
 #include "bsp.hpp"
 #include <stdint.h>
 
+// Forward declaration (defined in mesh_conductor.h)
+struct PeerSyncEntry;
+
 // Peer status flags
 #define PEER_STATUS_ALIVE     0x01
 #define PEER_STATUS_SLEEPING  0x02
@@ -52,6 +55,9 @@ public:
 
     // Dimension tracking
     static uint8_t getDimension();  // 1, 2, or 3
+
+    // Seed from peer shadow (used during role transfer)
+    static void seedFromShadow(const PeerSyncEntry* entries, uint8_t count);
 
     // Sync to peers
     static void broadcastSync();

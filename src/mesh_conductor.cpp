@@ -2,12 +2,14 @@
 #include "peer_table.h"
 #include "ftm_manager.h"
 #include "ftm_scheduler.h"
+#include "nvs_config_registry.h"
 #include "bsp.hpp"
 #include "rtc_mesh_map.h"
 #include "power_manager.h"
 #include "nvs_config.h"
 #include "sq_log.h"
 #include <Arduino.h>
+#include <ArduinoJson.h>
 #include <string.h>
 #include <esp_wifi.h>
 #include <esp_mesh.h>
@@ -33,6 +35,9 @@ static MeshNode    s_meshNode;
 static PeerSyncEntry s_peerShadow[MESH_MAX_NODES];
 static uint8_t       s_peerShadowCount = 0;
 
+// Gateway MAC — all nodes track this for heartbeat routing
+static uint8_t       s_gatewayMac[6] = {0};
+
 // Election state
 static uint8_t     s_parentRetries  = 0;
 static TimerHandle_t s_electTimer   = nullptr;
@@ -42,6 +47,11 @@ static TaskHandle_t  s_electTaskHandle = nullptr;
 static ElectionScore s_scores[MESH_MAX_NODES];
 static uint8_t     s_scoreCount     = 0;
 static uint16_t    s_gwTenure       = 0;        // cached from NVS
+
+// Config response wait mechanism
+static SemaphoreHandle_t s_configRespSema = nullptr;
+static char              s_configRespBuf[480];
+static uint8_t           s_configRespReqId = 0;
 
 // Task-notification bits for the election task
 static constexpr uint32_t ELECT_NOTIFY_RUN     = (1u << 0);
@@ -145,6 +155,9 @@ static void buildOwnScore(ElectionScore* out) {
 static void assignRole(const uint8_t* winnerMac) {
     uint8_t own_mac[6];
     esp_read_mac(own_mac, ESP_MAC_WIFI_STA);
+
+    // Track logical gateway MAC on all nodes
+    memcpy(s_gatewayMac, winnerMac, 6);
 
     IMeshRole* newRole;
     if (memcmp(own_mac, winnerMac, 6) == 0) {
@@ -320,7 +333,7 @@ void MeshConductor::runElection() {
 static void meshRxTask(void* pvParameters) {
     mesh_addr_t from;
     mesh_data_t data;
-    uint8_t rx_buf[256];
+    uint8_t rx_buf[512];
     data.data = rx_buf;
     data.size = sizeof(rx_buf);
     int flag = 0;
@@ -438,6 +451,109 @@ static void meshRxTask(void* pvParameters) {
                     SqLog.printf("[mesh] PEER_SYNC received: %u entries\n", count);
                 }
             }
+            else if (msgType == MSG_TYPE_CONFIG_REQ && data.size >= 3) {
+                uint8_t reqId = rx_buf[1];
+                const char* json = (const char*)&rx_buf[2];
+                // Ensure null-terminated
+                rx_buf[data.size] = '\0';
+
+                JsonDocument reqDoc;
+                DeserializationError jsonErr = deserializeJson(reqDoc, json);
+                if (jsonErr) {
+                    SqLog.printf("[mesh] CONFIG_REQ: JSON parse error: %s\n", jsonErr.c_str());
+                } else {
+                    const char* action = reqDoc["action"] | "get";
+                    JsonDocument respDoc;
+
+                    // Add own MAC to response
+                    uint8_t own_mac[6];
+                    esp_read_mac(own_mac, ESP_MAC_WIFI_STA);
+                    char macStr[18];
+                    snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+                        own_mac[0], own_mac[1], own_mac[2],
+                        own_mac[3], own_mac[4], own_mac[5]);
+                    respDoc["mac"] = macStr;
+
+                    if (strcmp(action, "set") == 0) {
+                        uint8_t applied = configApplyJson(reqDoc.as<JsonObjectConst>());
+                        SqLog.printf("[mesh] CONFIG_REQ set: applied %u fields\n", applied);
+                        // Respond with new values of all fields that were set
+                        for (JsonPairConst kv : reqDoc.as<JsonObjectConst>()) {
+                            const char* key = kv.key().c_str();
+                            if (strcmp(key, "action") == 0) continue;
+                            const ConfigField* f = configLookup(key);
+                            if (f) configBuildJson(respDoc, (const char**)&key, 1);
+                        }
+                    } else {
+                        // "get"
+                        if (reqDoc["fields"].is<JsonArray>()) {
+                            JsonArray arr = reqDoc["fields"];
+                            const char* fields[20];
+                            uint8_t cnt = 0;
+                            for (JsonVariant v : arr) {
+                                if (cnt < 20) fields[cnt++] = v.as<const char*>();
+                            }
+                            configBuildJson(respDoc, fields, cnt);
+                        } else {
+                            configBuildJson(respDoc, nullptr, 0);
+                        }
+                    }
+
+                    // Serialize and send response
+                    char respJson[460];
+                    size_t jsonLen = serializeJson(respDoc, respJson, sizeof(respJson));
+
+                    uint8_t respBuf[464];
+                    respBuf[0] = MSG_TYPE_CONFIG_RESP;
+                    respBuf[1] = reqId;
+                    memcpy(&respBuf[2], respJson, jsonLen + 1);  // include null
+
+                    MeshConductor::sendToNode(from.addr, respBuf, 2 + jsonLen + 1);
+                }
+            }
+            else if (msgType == MSG_TYPE_CONFIG_RESP && data.size >= 3) {
+                uint8_t reqId = rx_buf[1];
+                if (reqId == s_configRespReqId && s_configRespSema) {
+                    size_t payloadLen = data.size - 2;
+                    if (payloadLen >= sizeof(s_configRespBuf))
+                        payloadLen = sizeof(s_configRespBuf) - 1;
+                    memcpy(s_configRespBuf, &rx_buf[2], payloadLen);
+                    s_configRespBuf[payloadLen] = '\0';
+                    xSemaphoreGive(s_configRespSema);
+                }
+            }
+            else if (msgType == MSG_TYPE_ROLE_CHANGE && data.size >= sizeof(RoleChangeMsg)) {
+                RoleChangeMsg* rc = (RoleChangeMsg*)rx_buf;
+                uint8_t own_mac[6];
+                esp_read_mac(own_mac, ESP_MAC_WIFI_STA);
+
+                SqLog.printf("[mesh] ROLE_CHANGE: new gateway=%02X:%02X:%02X:%02X:%02X:%02X\n",
+                    rc->new_gw[0], rc->new_gw[1], rc->new_gw[2],
+                    rc->new_gw[3], rc->new_gw[4], rc->new_gw[5]);
+
+                memcpy(s_gatewayMac, rc->new_gw, 6);
+
+                if (memcmp(own_mac, rc->new_gw, 6) == 0) {
+                    // I am the new gateway — seed PeerTable from shadow, become Gateway
+                    SqLog.println("[mesh] I am the new gateway!");
+                    if (s_role) s_role->end();
+                    s_role = &s_gateway;
+                    s_role->begin();
+                    // Seed PeerTable from peerShadow (received via PEER_SYNC before role change)
+                    PeerTable::seedFromShadow(s_peerShadow, s_peerShadowCount);
+                    s_electionDone = true;
+                } else {
+                    // I am not the new gateway — ensure I am NODE role
+                    if (s_role && s_role->isGateway()) {
+                        // This shouldn't happen (gateway sends the message, not receives it)
+                        // but handle defensively
+                        if (s_role) s_role->end();
+                        s_role = &s_meshNode;
+                        s_role->begin();
+                    }
+                    // If already a node, just update gateway MAC (already done above)
+                }
+            }
             else if (msgType == MSG_TYPE_NOMINATE && data.size >= sizeof(NominateMsg)) {
                 NominateMsg* nom = (NominateMsg*)rx_buf;
                 if (s_role && s_role->isGateway()) {
@@ -552,7 +668,13 @@ static void meshEventHandler(void* arg, esp_event_base_t event_base,
             hb.battery_mv = (uint16_t)PowerManager::batteryMv();
             hb.flags = 0;
             esp_read_mac(hb.softap_mac, ESP_MAC_WIFI_SOFTAP);
-            MeshConductor::sendToRoot(&hb, sizeof(hb));
+            // Use logical gateway MAC if known, else fall back to ESP-IDF root
+            static const uint8_t zero[6] = {0};
+            if (memcmp(s_gatewayMac, zero, 6) != 0) {
+                MeshConductor::sendToNode(s_gatewayMac, &hb, sizeof(hb));
+            } else {
+                MeshConductor::sendToRoot(&hb, sizeof(hb));
+            }
         }
 
         // Start election after settle delay
@@ -672,6 +794,10 @@ void MeshConductor::init() {
 
     nvsReadTenure();
     SqLog.printf("[mesh] Gateway tenure from NVS: %u\n", s_gwTenure);
+
+    // Config response semaphore
+    if (!s_configRespSema)
+        s_configRespSema = xSemaphoreCreateBinary();
 
     // Initialize network interface
     ESP_ERROR_CHECK(esp_netif_init());
@@ -856,16 +982,24 @@ void MeshConductor::nominateNode(const uint8_t* sta_mac) {
         return;
     }
 
-    SqLog.printf("[mesh] Waiving root to nominee %02X:%02X:%02X:%02X:%02X:%02X\n",
+    SqLog.printf("[mesh] ROLE_CHANGE → %02X:%02X:%02X:%02X:%02X:%02X\n",
         sta_mac[0], sta_mac[1], sta_mac[2], sta_mac[3], sta_mac[4], sta_mac[5]);
 
-    mesh_vote_t vote;
-    vote.percentage = 0.8f;
-    vote.is_rc_specified = true;
-    memcpy(vote.config.rc_addr.addr, sta_mac, 6);
-    esp_mesh_waive_root(&vote, MESH_VOTE_REASON_ROOT_INITIATED);
+    // Broadcast ROLE_CHANGE to all peers (including the nominee)
+    RoleChangeMsg rc;
+    rc.type = MSG_TYPE_ROLE_CHANGE;
+    memcpy(rc.new_gw, sta_mac, 6);
+    broadcastToAll(&rc, sizeof(rc));
 
-    assignRole(sta_mac);  // step down to node
+    // Small delay so the message reaches all peers before we transition
+    vTaskDelay(pdMS_TO_TICKS(200));
+
+    // Update local gateway MAC and transition to NODE role
+    memcpy(s_gatewayMac, sta_mac, 6);
+    if (s_role) s_role->end();
+    s_role = &s_meshNode;
+    s_role->begin();
+    SqLog.println("[mesh] Stepped down to NODE");
 }
 
 void MeshConductor::stepDown() {
@@ -900,15 +1034,19 @@ void MeshConductor::stepDown() {
     nominateNode(candidate->mac);
 }
 
+// One-shot task to perform role transfer outside timer callback context
+static void reelectionTask(void* arg) {
+    (void)arg;
+    MeshConductor::stepDown();
+    vTaskDelete(nullptr);
+}
+
 void MeshConductor::forceReelection() {
-    SqLog.println("[mesh] Forcing re-election — sleep and reboot...");
-    if (s_role) {
-        s_role->end();
-        s_role = nullptr;
-    }
-    stop();
-    SQ_LIGHT_SLEEP(MESH_REELECT_SLEEP_MS);
-    esp_restart();
+    SqLog.println("[mesh] Scheduling re-election (deferred to task context)...");
+    // stepDown() does heavy work (broadcast, role switch, logging) that
+    // overflows the FreeRTOS timer service task stack.  Spawn a one-shot
+    // task with enough stack to handle it safely.
+    xTaskCreate(reelectionTask, "reelect", 4096, nullptr, 5, nullptr);
 }
 
 // --- Messaging helpers ---
@@ -935,11 +1073,6 @@ esp_err_t MeshConductor::sendToNode(const uint8_t* sta_mac, const void* data, ui
 }
 
 esp_err_t MeshConductor::broadcastToAll(const void* data, uint16_t len) {
-    // Send to all nodes in the routing table
-    mesh_addr_t routing_table[MESH_MAX_NODES];
-    int table_size = 0;
-    esp_mesh_get_routing_table(routing_table, MESH_MAX_NODES, &table_size);
-
     uint8_t own_mac[6];
     esp_read_mac(own_mac, ESP_MAC_WIFI_STA);
 
@@ -950,10 +1083,76 @@ esp_err_t MeshConductor::broadcastToAll(const void* data, uint16_t len) {
     mdata.tos = MESH_TOS_P2P;
 
     esp_err_t last_err = ESP_OK;
-    for (int i = 0; i < table_size; i++) {
-        if (memcmp(routing_table[i].addr, own_mac, 6) == 0) continue;
-        esp_err_t err = esp_mesh_send(&routing_table[i], &mdata, MESH_DATA_P2P, NULL, 0);
-        if (err != ESP_OK) last_err = err;
+
+    if (esp_mesh_is_root()) {
+        // ESP-IDF root: use routing table for complete mesh coverage
+        mesh_addr_t routing_table[MESH_MAX_NODES];
+        int table_size = 0;
+        esp_mesh_get_routing_table(routing_table, MESH_MAX_NODES, &table_size);
+
+        for (int i = 0; i < table_size; i++) {
+            if (memcmp(routing_table[i].addr, own_mac, 6) == 0) continue;
+            esp_err_t err = esp_mesh_send(&routing_table[i], &mdata, MESH_DATA_P2P, NULL, 0);
+            if (err != ESP_OK) last_err = err;
+        }
+    } else {
+        // Non-root gateway (after role transfer): use PeerTable MACs
+        uint8_t count = PeerTable::peerCount();
+        for (uint8_t i = 0; i < count; i++) {
+            PeerEntry* e = PeerTable::getEntryByIndex(i);
+            if (!e) continue;
+            if (memcmp(e->mac, own_mac, 6) == 0) continue;
+            if (e->flags & PEER_STATUS_DEAD) continue;
+            mesh_addr_t addr;
+            memcpy(addr.addr, e->mac, 6);
+            esp_err_t err = esp_mesh_send(&addr, &mdata, MESH_DATA_P2P, NULL, 0);
+            if (err != ESP_OK) last_err = err;
+        }
     }
     return last_err;
+}
+
+// --- Remote config helpers ---
+
+bool MeshConductor::sendConfigReq(const uint8_t* sta_mac, const char* json, uint8_t reqId) {
+    size_t jsonLen = strlen(json);
+    if (jsonLen + 3 > 512) return false;  // too large
+
+    uint8_t buf[512];
+    buf[0] = MSG_TYPE_CONFIG_REQ;
+    buf[1] = reqId;
+    memcpy(&buf[2], json, jsonLen + 1);  // include null terminator
+
+    s_configRespReqId = reqId;
+    s_configRespBuf[0] = '\0';
+    // Drain any stale semaphore
+    if (s_configRespSema)
+        xSemaphoreTake(s_configRespSema, 0);
+
+    esp_err_t err = sendToNode(sta_mac, buf, 2 + jsonLen + 1);
+    return err == ESP_OK;
+}
+
+bool MeshConductor::waitConfigResp(char* outBuf, size_t bufSize, uint32_t timeout_ms) {
+    if (!s_configRespSema) return false;
+    if (xSemaphoreTake(s_configRespSema, pdMS_TO_TICKS(timeout_ms)) == pdTRUE) {
+        strncpy(outBuf, s_configRespBuf, bufSize - 1);
+        outBuf[bufSize - 1] = '\0';
+        return true;
+    }
+    return false;
+}
+
+// --- Gateway MAC tracking ---
+
+const uint8_t* MeshConductor::gatewayMac() {
+    return s_gatewayMac;
+}
+
+void MeshConductor::setGatewayMac(const uint8_t* mac) {
+    memcpy(s_gatewayMac, mac, 6);
+}
+
+const PeerSyncEntry* MeshConductor::peerShadowEntries() {
+    return s_peerShadow;
 }
