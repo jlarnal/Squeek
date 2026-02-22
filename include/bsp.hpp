@@ -13,6 +13,10 @@
 #define LED_BUILTIN          GPIO_NUM_15
 #define RBG_BUILTIN          GPIO_NUM_8
 
+// Piezo buzzer (push-pull, opposed phases)
+constexpr gpio_num_t PIEZO_PIN_A = GPIO_NUM_22;  // push-pull positive
+constexpr gpio_num_t PIEZO_PIN_B = GPIO_NUM_23;  // push-pull complement
+
 // Battery ADC
 #define BATTERY_ADC_PIN      GPIO_NUM_2
 #define BATTERY_ADC_CHANNEL  ADC_CHANNEL_2

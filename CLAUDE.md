@@ -16,9 +16,13 @@ Phase 1 delivers: WiFi mesh formation, weighted gateway election (battery + adja
 
 Phase 2 delivers: PeerTable (IRAM working map with 16-node capacity), heartbeat protocol (MSG_TYPE_HEARTBEAT, 30s default, NVS-tunable), battery-aware re-election on stable mesh, FtmManager (FTM initiator with 2σ outlier rejection), FtmScheduler (priority queue, wake/ready/go state machine, anchor+incremental scheduling), PositionSolver (classical MDS via power iteration + per-node diagonal Kalman filter, 1D/2D/3D adaptive), 10 new NVS parameters, 7 new mesh message types.
 
-**Debug CLI: COMPLETE** — Always-on serial CLI (FreeRTOS task, non-blocking). 16 text commands: help, led, battery, wifi, mesh, elect, rtc, sleep, peers, ftm, sweep, solve, broadcast, quiet, status, reboot. SqLog wrapper gates background output through quiet-mode flag (also suppresses ESP_LOG via esp_log_set_vprintf). Replaces old blocking marquee/numbered debug menu.
+**Phase 3 — Audio Engine: VERIFIED** (hardware-tested on real boards)
 
-**Next: Hardware verification** — Flash both boards and run through Phase 2a-2d verification steps (see plan). Critical test: `ftm` command to verify FTM works while mesh is active.
+Phase 3 delivers: LEDC PWM + GPTimer tone engine (Mozzi removed — incompatible with ESP32-C6 single-core RISC-V). PiezoDriver (push-pull complementary LEDC on GPIO22/GPIO23), AudioEngine (GPTimer ISR at 200 Hz, fixed-point envelope interpolation), ToneLibrary (6 built-in tones: chirp, chirp_down, squeak, warble, alert, fade_chirp), IAudioOutput interface for future I2S DAC.
+
+**Debug CLI: COMPLETE** — Always-on serial CLI (FreeRTOS task, non-blocking). 18 text commands: help, led, battery, wifi, mesh, elect, rtc, sleep, peers, tone, config, mode, ftm, sweep, solve, broadcast, quiet, status, reboot. Tab-cycles last 3 successful commands as history. Interactive `tone` command with ASCII numpad (keys 1-6 play tones, 0 stops, `.` quits). SqLog wrapper gates background output through quiet-mode flag (also suppresses ESP_LOG via esp_log_set_vprintf).
+
+**Next: Phase 4 — Orchestrator** — Coordinated sound across the flotilla (traveling sound, random pop-up, triggered sequences).
 
 ## Tools
 

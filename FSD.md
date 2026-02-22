@@ -29,7 +29,7 @@ Squeek is a pet toy and prank device built from a flotilla of identical ESP32-C6
  -  `https://github.com/me-no-dev/AsyncTCP.git#master` for inteactive React/Preact web pages.
  -	`https://github.com/me-no-dev/ESPAsyncWebServer.git#master` for webservices. 
  -	`paulstoffregen/Time @ ^1.6.1  ` to allow for NTP. 
- -	`sensorium/Mozzi@^2.0.2	` for sound synthesis. 
+ -	LEDC PWM + GPTimer for procedural tone synthesis (no external library).
 
 ### Pin Mapping (defined in `include/bsp.hpp`)
 | Symbol | GPIO | Purpose |
@@ -37,7 +37,7 @@ Squeek is a pet toy and prank device built from a flotilla of identical ESP32-C6
 | `LED_BUILTIN` | GPIO15 | Status LED (via 1K resistor) |
 | `RBG_BUILTIN` | GPIO8 | WS2812 RGB LED |
 | TBD | GPIO2/3 | Battery voltage ADC (via voltage divider) |
-| TBD | 2x GPIO | Piezo buzzer (push-pull, opposed phases) |
+| `PIEZO_PIN_A` / `PIEZO_PIN_B` | GPIO22 / GPIO23 | Piezo buzzer (push-pull, opposed phases) |
 
 
 **All app-centric preprocessor defines are made in `include/bsp.hpp`.**
@@ -76,7 +76,7 @@ Nodes use WiFi FTM to build a 3D spatial map of the flotilla without any manual 
 - Incremental updates: if a node moves, only its edges re-measured
 
 ### FR4 — Sound Playback
-- **Tone synthesis** via Mozzi — procedural chirps, squeaks, warbles, melodies
+- **Tone synthesis** via LEDC PWM + GPTimer — procedural chirps, squeaks, warbles, melodies
 - **Sample playback** — compressed audio clips (MP3) decoded via libhelix-mp3, stored in LittleFS
 - **Audio output layer is modular:**
   - Phase 1: piezo buzzer, push-pull via two GPIOs (doubled voltage swing)
@@ -179,12 +179,12 @@ Each node maintains a local map of the mesh it belongs to, stored in two tiers:
 | **RtcMap** | `rtc_mesh_map.h/cpp` | RTC slow-memory mesh map with checksummed save/restore (static class) |
 | **MeshConductor** | `mesh_conductor.h/cpp`, `mesh_gateway.cpp`, `mesh_node.cpp` | WiFi mesh join/heal, NVS-tunable weighted gateway election (`double` score), `IMeshRole` strategy (Gateway / MeshNode), message routing |
 | **Localization Engine** | `ftm_manager.h/cpp`, `position_solver.h/cpp` | FTM round scheduling, distance matrix, 3D position solver (trilateration/MDS) |
-| **Audio Engine** | `audio_engine.h/cpp`, `audio_tweeter.h/cpp`, `audio_i2s.h/cpp`, `tone_library.h/cpp`, `sample_player.h/cpp` | Modular: Mozzi synthesis + MP3 decode → abstract output (piezo driver / I2S driver) |
+| **Audio Engine** | `audio_engine.h/cpp`, `audio_tweeter.h/cpp`, `audio_i2s.h/cpp`, `tone_library.h/cpp`, `sample_player.h/cpp` | Modular: LEDC PWM tone synthesis + MP3 decode → abstract output (piezo driver / I2S driver) |
 | **Storage** | `storage_manager.h/cpp` | LittleFS: samples, node config, sequences, position cache |
 | **Orchestrator** | `orchestrator.h/cpp`, `clock_sync.h/cpp` | Play modes, sequence execution, mesh clock sync, scheduling |
 | **Gateway Services** | `web_server.h/cpp` | Web server, SoftAP, REST API, UI assets (active on elected gateway only) |
 | **Stealth & OTA** | `stealth_manager.h/cpp`, `ota_manager.h/cpp` | Stealth mode (hide AP), OTA firmware updates |
-| **Debug Menu** | `debug_menu.h/cpp` | Compile-time serial debug menu with animated marquee and per-phase test entries |
+| **Debug CLI** | `debug_cli.h/cpp` | Always-on serial CLI (FreeRTOS task), Tab-cycle command history, interactive tone player |
 
 ### Node Lifecycle State Machine
 
@@ -220,7 +220,7 @@ LOW_BATTERY → DEEP_SLEEP (timer-only wake for periodic check)
 | Build system | PlatformIO + pioarduino platform | Dual Arduino + ESP-IDF |
 | WiFi Mesh | ESP-IDF WiFi Mesh (`esp_mesh`) | Self-healing mesh network |
 | FTM | ESP-IDF FTM API (`esp_wifi_ftm`) | Pairwise ranging for localization |
-| Audio synthesis | Mozzi | Procedural tone generation (chirps, squeaks, warbles) |
+| Audio synthesis | LEDC + GPTimer | Procedural tone generation (chirps, squeaks, warbles) |
 | MP3 decode | chmorgan/esp-libhelix-mp3 | Compressed sample playback |
 | File system | joltwallet/littlefs | Sample storage, config, sequences |
 | LED | WS2812 driver (via GPIO8) | Visual status feedback |
@@ -243,8 +243,8 @@ LOW_BATTERY → DEEP_SLEEP (timer-only wake for periodic check)
 - [x] Light sleep between heartbeats (via `SQ_POWER_DELAY` macro, suppressed in debug builds)
 - [x] RTC slow-memory mesh map with checksummed save/restore (`RtcMap`)
 - [x] NvsConfigManager with `PropertyValue<>` auto-persistence, compile-time settings hash, factory reset
-- [x] Debug menu with animated marquee and 7 interactive test entries
-- **Deliverable:** Scatter nodes, they find each other. Kill the gateway, another takes over. Serial debug menu for hardware testing.
+- [x] Debug CLI — always-on serial CLI with 18 text commands, Tab-cycle history, interactive tone player
+- **Deliverable:** Scatter nodes, they find each other. Kill the gateway, another takes over. Serial CLI for hardware testing.
 
 ### Phase 2 — FTM Localization
 **Goal:** Nodes know where they are in 3D space.
@@ -260,12 +260,14 @@ LOW_BATTERY → DEEP_SLEEP (timer-only wake for periodic check)
 ### Phase 3 — Audio Engine
 **Goal:** Every node can make sound.
 
-- Mozzi integration with push-pull piezo output (two GPIOs from `bsp.hpp`)
-- Procedural tone library: chirps, squeaks, warbles
-- MP3 sample decode via libhelix → piezo output
-- LittleFS sample storage (upload via serial for now)
-- Modular audio output interface (piezo driver now, I2S driver later)
-- **Deliverable:** Node plays a chirp on command via serial.
+- LEDC PWM tone engine with push-pull piezo output on GPIO22/GPIO23
+- GPTimer ISR at 200 Hz for envelope interpolation (fixed-point, no floats)
+- Procedural tone library: chirps, squeaks, warbles, alert, fade
+- Segment-sequence format: `{freq_start, freq_end, duty_start, duty_end, duration_ms}`
+- Modular audio output interface (`IAudioOutput` — piezo driver now, I2S driver later)
+- MP3 sample decode via libhelix → piezo output (future)
+- LittleFS sample storage (upload via serial, future)
+- **Deliverable:** Node plays a chirp on command via `tone` CLI command.
 
 ### Phase 4 — Orchestrator & Play Modes
 **Goal:** Coordinated sound across the flotilla.
@@ -326,8 +328,8 @@ LOW_BATTERY → DEEP_SLEEP (timer-only wake for periodic check)
 | `src/power_manager.cpp` | ADC oneshot with curve-fitting calibration, voltage divider math, sleep delegates | Done |
 | `include/rtc_mesh_map.h` | `RtcMap` static class + `rtc_mesh_map_t` struct — RTC slow-memory mesh map | Done |
 | `src/rtc_mesh_map.cpp` | Checksummed save/restore, `RTC_DATA_ATTR` storage, init/clear/print | Done |
-| `include/debug_menu.h` | Debug menu entry point declaration | Done |
-| `src/debug_menu.cpp` | Animated marquee, 7 Phase-1 test entries, serial interaction loop | Done |
+| `include/debug_cli.h` | Debug CLI entry point declaration | Done |
+| `src/debug_cli.cpp` | Always-on serial CLI task, 18 commands, Tab-cycle history, interactive tone player | Done |
 
 ### Phase 1 — Mesh & Election (implemented)
 
@@ -347,18 +349,18 @@ LOW_BATTERY → DEEP_SLEEP (timer-only wake for periodic check)
 | `include/position_solver.h` | 3D position solver (MDS / trilateration) | Stub |
 | `src/position_solver.cpp` | Distance matrix → 3D coordinates | Stub |
 
-### Phase 3 — Audio Engine (stub)
+### Phase 3 — Audio Engine (implemented)
 
 | File | Purpose | Status |
 |------|---------|--------|
-| `include/audio_engine.h` | Audio engine orchestrator — abstract output interface | Stub |
-| `src/audio_engine.cpp` | Mozzi integration, playback coordination | Stub |
-| `include/audio_tweeter.h` | Piezo buzzer driver (push-pull, two GPIOs) | Stub |
-| `src/audio_tweeter.cpp` | GPIO push-pull waveform generation | Stub |
+| `include/audio_engine.h` | `IAudioOutput` interface + `AudioEngine` sequencer class | Done |
+| `src/audio_engine.cpp` | GPTimer ISR at 200 Hz, fixed-point envelope interpolation, play/stop API | Done |
+| `include/audio_tweeter.h` | `PiezoDriver` class (LEDC push-pull on GPIO22/23) | Done |
+| `src/audio_tweeter.cpp` | LEDC dual-channel complementary PWM driver | Done |
 | `include/audio_i2s.h` | I2S DAC output driver (future) | Stub |
 | `src/audio_i2s.cpp` | I2S configuration and DMA feed | Stub |
-| `include/tone_library.h` | Procedural tone definitions — chirps, squeaks, warbles | Stub |
-| `src/tone_library.cpp` | Mozzi patch parameter sets | Stub |
+| `include/tone_library.h` | `ToneSegment`/`ToneSequence` structs, `ToneLibrary` static class | Done |
+| `src/tone_library.cpp` | Built-in tone definitions (chirp, squeak, warble, alert, fade), lookup/list | Done |
 | `include/sample_player.h` | MP3 sample decoder (libhelix) | Stub |
 | `src/sample_player.cpp` | LittleFS read → MP3 decode → audio output | Stub |
 
@@ -610,110 +612,83 @@ sequenceDiagram
 
 ## 8. Open Questions
 
-1. **Piezo GPIO assignment** — Which two GPIOs for push-pull piezo? Needs to be added to `bsp.hpp`.
+1. ~~**Piezo GPIO assignment**~~ — Resolved: GPIO22 (`PIEZO_PIN_A`) + GPIO23 (`PIEZO_PIN_B`), defined in `bsp.hpp`.
 2. ~~**Battery ADC GPIO**~~ — Resolved: GPIO2 (`BATTERY_ADC_PIN`), defined in `bsp.hpp`.
 3. ~~**ESP-IDF WiFi Mesh vs ESP-NOW**~~ — Resolved: using `esp_mesh` (ESP-IDF WiFi Mesh). Implemented in `MeshConductor`.
-4. **Mozzi on ESP32-C6** — Needs a compilation test early in Phase 3. Fallback: direct LEDC PWM synthesis.
+4. ~~**Mozzi on ESP32-C6**~~ — Resolved: Mozzi incompatible with ESP32-C6 single-core RISC-V (watchdog resets). Replaced with LEDC PWM + GPTimer.
 5. **FTM accuracy in practice** — Real-world testing needed in Phase 2 to calibrate expectations for 3D positioning.
 6. **Web UI framework** — Vanilla JS for minimal size, or a lightweight framework? Storage budget is limited (4MB flash shared with firmware + samples).
 7. **Max sample storage** — How much flash to allocate for uploaded MP3 samples after firmware + UI assets?
 
 ---
 
-## Appendix A — Debug Menu
+## Appendix A — Debug CLI
 
-A compile-time debug menu for in-situ hardware and firmware testing via the serial monitor. Each implementation phase adds its own test entries so that new subsystems can be verified on real hardware as they land.
+An always-on serial CLI for in-situ hardware and firmware testing. Runs as a FreeRTOS task alongside normal firmware operation (non-blocking). Replaces the old numbered debug menu.
 
 ### A.1 Activation Mechanism
 
 - `#define DEBUG_MENU_ENABLED` declared in `include/bsp.hpp`
-- When defined, `setup()` calls `debug_menu()` before any normal initialization
-- When undefined, the debug menu code is exclided from compilation entirely (`#ifdef` guard)
+- When defined, `setup()` calls `debug_cli_init()` which spawns the CLI task
+- When undefined, the CLI code is excluded from compilation entirely (`#ifdef` guard)
 
-### A.2 Startup Behavior
+### A.2 CLI Features
 
-1. On boot, the debug menu prints an animated scrolling marquee to Serial (project name, version, kitt-scanner dot moving on a row).
-2. The marquee loops indefinitely, waiting for **any keypress** or **Line feed** (i.e '\n') on Serial. The latter enters the menu, any other key skips it — this gives the developer time to open the serial monitor after flashing.
-3. Once a key is received, the marquee stops and the numbered menu is displayed.
-4. A configurable timeout (default 30 seconds) auto-skips to normal boot if no key is pressed — avoids bricking a battery-only node left in debug mode.
+- **Always-on:** CLI runs concurrently with mesh, audio, and all other subsystems
+- **Command history:** Tab cycles through the last 3 successful commands (most recent first, wraps to empty)
+- **Interactive modes:** Some commands (e.g., `tone`) enter a sub-mode with single-keypress interaction; `.` or DEL exits back to the CLI prompt
 
-### A.3 Menu Interaction
+### A.3 Command Reference
 
-- Simple mnemonic menu printed to Serial, one entry per line
-- User types a number + Enter to select.
-- After a test completes, the menu re-displays (loop until the user picks "Exit" or the inactivity timeout expires).
-- Menu entries grow with each phase — each phase adds its test **items**.
-- Entries are organized by phase/category with clear header lines.
+| Command | Description |
+|---------|-------------|
+| `help` | List all commands |
+| `led` | Blink status LED + RGB R/G/B test |
+| `battery` | Read battery voltage and status |
+| `wifi` | Scan nearby APs |
+| `mesh` | Join mesh, show peers, then stop |
+| `elect` | Force gateway re-election |
+| `rtc` | RTC memory write/readback test |
+| `sleep [N]` | Light sleep for N seconds (default 5) |
+| `peers` | Show PeerTable (synced from gateway) |
+| `tone` | Interactive tone player — ASCII numpad, keys 1-6 play tones, 0 stops, `.` quits |
+| `config` | Get/set NVS config locally or on peers (`config list`, `config get`, `config set`) |
+| `mode` | Set role: `mode gateway` or `mode peer` |
+| `ftm` | FTM single-shot to first peer |
+| `sweep` | FTM full sweep, print distance matrix |
+| `solve` | Run MDS position solver |
+| `broadcast` | Broadcast positions to all nodes |
+| `quiet` | Toggle background output suppression |
+| `status` | Print mesh state, role, battery, peers |
+| `reboot` | Reboot (`esp_restart`) |
 
-### A.4 Menu Entries by Phase
+### A.4 Tone Player Sub-Mode
 
-#### Phase 1 — Mesh & Blink
+Entering `tone` displays an ASCII numpad and reads single keypresses:
 
-| # | Entry | Description |
-|---|-------|-------------|
-| 1 | LED test | Blink GPIO15, flash WS2812 in R/G/B sequence |
-| 2 | Battery ADC | Read and print raw ADC value + computed voltage |
-| 3 | WiFi scan | Scan and list nearby APs (verify radio works) |
-| 4 | Mesh join | Attempt mesh formation, print peer count + gateway MAC |
-| 5 | Gateway election | Force re-election, print result |
-| 6 | RTC memory | Write/read-back test of RTC slow memory mesh map |
-| 7 | Light sleep | Enter light sleep for N seconds, wake, print confirmation |
+```
+┌───────┬───────┬───────┐
+│ 7     │ 8     │ 9     │
+│  ---  │  ---  │  ---  │
+├───────┼───────┼───────┤
+│ 4     │ 5     │ 6     │
+│warble │ alert │ fade  │
+│       │       │ chirp │
+├───────┼───────┼───────┤
+│ 1     │ 2     │ 3     │
+│ chirp │ chirp │ squeak│
+│       │ down  │       │
+├───────┴───────┼───────┤
+│     0 = stop  │ . quit│
+└───────────────┴───────┘
+```
 
-#### Phase 2 — FTM Localization
-
-| # | Entry | Description |
-|---|-------|-------------|
-| 8 | FTM single-shot | Initiate one FTM exchange with a specific peer, print RTT/distance |
-| 9 | FTM full sweep | Run pairwise FTM with all visible peers, print distance matrix |
-| 10 | Position solver | Run MDS/trilateration on current distance matrix, print 3D coords |
-| 11 | Position broadcast | Send computed positions to mesh, confirm receipt |
-
-#### Phase 3 — Audio Engine
-
-| # | Entry | Description |
-|---|-------|-------------|
-| 12 | Piezo test tone | Drive push-pull piezo with a fixed-frequency square wave |
-| 13 | Mozzi chirp | Play a procedural chirp through Mozzi |
-| 14 | Mozzi squeak | Play a procedural squeak |
-| 15 | MP3 playback | Decode + play first MP3 sample from LittleFS |
-| 16 | LittleFS listing | List all files in LittleFS with sizes |
-
-#### Phase 4 — Orchestrator
-
-| # | Entry | Description |
-|---|-------|-------------|
-| 17 | Traveling sound test | Trigger a traveling sound across 2–3 nodes (gateway only) |
-| 18 | Random pop-up | Trigger one random pop-up event |
-| 19 | Clock sync check | Print local clock vs mesh reference clock delta |
-
-#### Phase 5 — Web UI
-
-| # | Entry | Description |
-|---|-------|-------------|
-| 20 | Start SoftAP | Bring up AP, print SSID + IP |
-| 21 | HTTP smoke test | Start web server, print URL, wait for one request |
-| 22 | REST API dump | Print JSON of `/nodes` and `/topology` endpoints |
-
-#### Phase 6 — Stealth & Polish
-
-| # | Entry | Description |
-|---|-------|-------------|
-| 23 | Stealth toggle | Enter/exit stealth mode, confirm AP visibility change |
-| 24 | OTA dry-run | Check OTA manifest endpoint without applying |
-| 25 | Power profile | Run a timed cycle of sleep/wake/radio and log current estimates |
-
-#### Always Present
-
-| # | Entry | Description |
-|---|-------|-------------|
-| 0 | Exit | Skip debug menu, proceed to normal `setup()` flow |
+Keys 7-9 are reserved for future tones. Pressing a tone key replaces any currently playing tone.
 
 ### A.5 Implementation Notes
 
-- The debug menu lives in its own source file (`src/debug_menu.cpp` / `include/debug_menu.h`)
-- Each phase's menu entries are gated by per-feature `#ifdef`s so the menu compiles even before later phases are implemented
+- The CLI lives in `src/debug_cli.cpp` / `include/debug_cli.h`
 - Serial baud rate: 115200 (matches `platformio.ini` `monitor_speed`)
-- The marquee animation uses only basic ASCII (no Unicode) for maximum terminal compatibility
 - **Sleep is incompatible with debugging.** When `DEBUG_MENU_ENABLED` is defined, all sleep modes (light sleep, deep sleep) must be disabled. A sleeping node kills Serial output, JTAG, and makes interactive debugging impossible. Sleep integration is only tested and enabled in release builds (i.e. when `DEBUG_MENU_ENABLED` is not defined).
 - **Power macros replace raw sleep/delay calls.** All power-saving sleeps and related timeouts must use the following macros (defined in `include/bsp.hpp`), never raw `esp_light_sleep_start()`, `esp_deep_sleep()`, or `delay()` for power-saving purposes:
   - `SQ_LIGHT_SLEEP(duration_ms)` — enters light sleep in release; becomes `delay(duration_ms)` when `DEBUG_MENU_ENABLED` is defined (keeps Serial and JTAG alive).

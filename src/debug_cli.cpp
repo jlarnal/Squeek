@@ -11,6 +11,9 @@
 #include "ftm_scheduler.h"
 #include "position_solver.h"
 #include "sq_log.h"
+#include "audio_engine.h"
+#include "audio_tweeter.h"
+#include "tone_library.h"
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <esp_system.h>
@@ -33,6 +36,7 @@ static void cmd_sweep(const char* args);
 static void cmd_solve(const char* args);
 static void cmd_broadcast(const char* args);
 static void cmd_quiet(const char* args);
+static void cmd_tone(const char* args);
 static void cmd_config(const char* args);
 static void cmd_mode(const char* args);
 static void cmd_status(const char* args);
@@ -55,6 +59,7 @@ static const CliCommand s_commands[] = {
     { "rtc",       cmd_rtc,       "RTC memory write/readback test" },
     { "sleep",     cmd_sleep,     "Light sleep [seconds] (default 5)" },
     { "peers",     cmd_peers,     "Show PeerTable (synced from gateway)" },
+    { "tone",      cmd_tone,      "Interactive tone player (numpad)" },
     { "config",    cmd_config,    "Get/set NVS config locally or on peers" },
     { "mode",      cmd_mode,      "Set role: 'mode gateway' or 'mode peer'" },
     { "ftm",       cmd_ftm,       "FTM single-shot to first peer" },
@@ -229,6 +234,73 @@ static void cmd_peers(const char* args) {
         PeerTable::print();
     } else {
         MeshConductor::printPeerShadow();
+    }
+}
+
+// Numpad key-to-tone mapping (index 0-9, nullptr = unassigned)
+static const struct { const char* name; const char* label; } s_padSlots[10] = {
+    { nullptr,      "stop"       },  // 0
+    { "chirp",      "chirp"      },  // 1
+    { "chirp_down", "chirp down" },  // 2
+    { "squeak",     "squeak"     },  // 3
+    { "warble",     "warble"     },  // 4
+    { "alert",      "alert"      },  // 5
+    { "fade_chirp", "fade chirp" },  // 6
+    { nullptr,      "---"        },  // 7
+    { nullptr,      "---"        },  // 8
+    { nullptr,      "---"        },  // 9
+};
+
+static void tonePadDraw(const char* status) {
+    Serial.println("Tone Player (press key, '.' to quit)");
+    Serial.println("\xe2\x94\x8c\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xac\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xac\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x90");  // ┌───────┬───────┬───────┐
+    // Row: 7 8 9
+    Serial.printf("\xe2\x94\x82 7     \xe2\x94\x82 8     \xe2\x94\x82 9     \xe2\x94\x82\n");
+    Serial.printf("\xe2\x94\x82 %-5s \xe2\x94\x82 %-5s \xe2\x94\x82 %-5s \xe2\x94\x82\n", s_padSlots[7].label, s_padSlots[8].label, s_padSlots[9].label);
+    Serial.println("\xe2\x94\x9c\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xbc\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xbc\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xa4");  // ├───────┼───────┼───────┤
+    // Row: 4 5 6
+    Serial.printf("\xe2\x94\x82 4     \xe2\x94\x82 5     \xe2\x94\x82 6     \xe2\x94\x82\n");
+    Serial.printf("\xe2\x94\x82 %-5s \xe2\x94\x82 %-5s \xe2\x94\x82 %-5s \xe2\x94\x82\n", s_padSlots[4].label, s_padSlots[5].label, s_padSlots[6].label);
+    Serial.println("\xe2\x94\x9c\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xbc\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xbc\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xa4");  // ├───────┼───────┼───────┤
+    // Row: 1 2 3
+    Serial.printf("\xe2\x94\x82 1     \xe2\x94\x82 2     \xe2\x94\x82 3     \xe2\x94\x82\n");
+    Serial.printf("\xe2\x94\x82 %-5s \xe2\x94\x82 %-5s \xe2\x94\x82 %-5s \xe2\x94\x82\n", s_padSlots[1].label, s_padSlots[2].label, s_padSlots[3].label);
+    Serial.println("\xe2\x94\x9c\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xb4\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xbc\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xa4");  // ├───────┴───────┼───────┤
+    Serial.println("\xe2\x94\x82     0 = stop  \xe2\x94\x82 . quit\xe2\x94\x82");
+    Serial.println("\xe2\x94\x94\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xb4\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x98");  // └───────────────┴───────┘
+    if (status && *status) {
+        Serial.printf("[%s]\n", status);
+    }
+}
+
+static void cmd_tone(const char* args) {
+    (void)args;
+    tonePadDraw(nullptr);
+
+    for (;;) {
+        if (!Serial.available()) {
+            vTaskDelay(pdMS_TO_TICKS(50));
+            continue;
+        }
+        char c = Serial.read();
+
+        if (c == '.' || c == 127) {
+            // Exit tone mode
+            AudioEngine::stop();
+            Serial.println("Tone player closed.");
+            return;
+        }
+
+        if (c >= '0' && c <= '9') {
+            int idx = c - '0';
+            if (idx == 0) {
+                AudioEngine::stop();
+            } else if (s_padSlots[idx].name) {
+                const ToneSequence* seq = ToneLibrary::get(s_padSlots[idx].name);
+                if (seq) AudioEngine::play(seq);
+            }
+        }
+        // Ignore other keys silently
     }
 }
 
@@ -695,6 +767,40 @@ static void cmd_reboot(const char* args) {
     esp_restart();
 }
 
+// --- CLI History ---
+
+static constexpr uint8_t HIST_MAX = 3;
+static char   s_history[HIST_MAX][128];
+static uint8_t s_histCount  = 0;   // total entries stored (0..HIST_MAX)
+static uint8_t s_histWrite  = 0;   // next write slot (circular)
+
+static void histPush(const char* line) {
+    // Skip if duplicate of most recent entry
+    if (s_histCount > 0) {
+        uint8_t last = (s_histWrite + HIST_MAX - 1) % HIST_MAX;
+        if (strcmp(s_history[last], line) == 0) return;
+    }
+    strncpy(s_history[s_histWrite], line, 127);
+    s_history[s_histWrite][127] = '\0';
+    s_histWrite = (s_histWrite + 1) % HIST_MAX;
+    if (s_histCount < HIST_MAX) s_histCount++;
+}
+
+// Erase current line on terminal, replace with new content
+static void lineReplace(char* lineBuf, uint8_t& linePos, const char* newLine) {
+    // Move cursor to start, overwrite with spaces, move back
+    Serial.print('\r');
+    Serial.print("> ");
+    for (uint8_t i = 0; i < linePos; i++) Serial.print(' ');
+    // Write new content
+    linePos = (uint8_t)strlen(newLine);
+    memcpy(lineBuf, newLine, linePos);
+    lineBuf[linePos] = '\0';
+    Serial.print('\r');
+    Serial.print("> ");
+    Serial.print(lineBuf);
+}
+
 // --- CLI Task ---
 
 static void debugCliTask(void* pvParameters) {
@@ -702,7 +808,10 @@ static void debugCliTask(void* pvParameters) {
     char lineBuf[128];
     uint8_t linePos = 0;
 
-    Serial.println("Squeek CLI ready. Type 'help' for commands.");
+    // Tab-cycle history: -1 = not browsing, 0 = most recent, etc.
+    int8_t browseIdx = -1;
+
+    Serial.println("Squeek CLI ready. Type 'help' for commands. Tab = history.");
     Serial.print("> ");
 
     for (;;) {
@@ -713,13 +822,38 @@ static void debugCliTask(void* pvParameters) {
 
         char c = Serial.read();
 
+        // Tab on empty line: cycle through history
+        if (c == '\t') {
+            if (s_histCount == 0) continue;
+            browseIdx++;
+            if (browseIdx >= (int8_t)s_histCount) {
+                // Wrapped past oldest — clear line
+                browseIdx = -1;
+                lineReplace(lineBuf, linePos, "");
+            } else {
+                uint8_t slot = (s_histWrite + HIST_MAX - 1 - browseIdx) % HIST_MAX;
+                lineReplace(lineBuf, linePos, s_history[slot]);
+            }
+            continue;
+        }
+
+        // Any non-Tab key resets browse state
+        if (browseIdx >= 0 && c != '\n' && c != '\r') {
+            browseIdx = -1;
+        }
+
         if (c == '\n' || c == '\r') {
+            browseIdx = -1;
             if (linePos == 0) {
                 Serial.print("\n> ");
                 continue;
             }
             Serial.println();
             lineBuf[linePos] = '\0';
+
+            // Save full line before parsing mutates it
+            char savedLine[128];
+            memcpy(savedLine, lineBuf, linePos + 1);
 
             // Parse command and args
             char* cmd = lineBuf;
@@ -743,6 +877,8 @@ static void debugCliTask(void* pvParameters) {
             }
             if (!found) {
                 Serial.printf("Unknown command: '%s'. Type 'help'.\n", cmd);
+            } else {
+                histPush(savedLine);
             }
 
             linePos = 0;
@@ -752,7 +888,7 @@ static void debugCliTask(void* pvParameters) {
                 linePos--;
                 Serial.print("\b \b");
             }
-        } else if (linePos < sizeof(lineBuf) - 1) {
+        } else if (c >= 0x20 && linePos < sizeof(lineBuf) - 1) {
             lineBuf[linePos++] = c;
             Serial.print(c);
         }

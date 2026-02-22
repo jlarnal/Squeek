@@ -6,7 +6,8 @@
 #include "power_manager.h"
 #include "mesh_conductor.h"
 #include "rtc_mesh_map.h"
-
+#include "audio_tweeter.h"
+#include "audio_engine.h"
 
 #ifdef DEBUG_MENU_ENABLED
 #include "debug_cli.h"
@@ -31,6 +32,10 @@ void setup()
     RtcMap::init();
     MeshConductor::init();
     MeshConductor::start();
+
+    PiezoDriver::instance().begin();
+    AudioEngine::init(&PiezoDriver::instance());
+
     LedDriver::rgbSet(RgbColor(NvsConfigManager::colorReady)); // dim green = init done.
 }
 

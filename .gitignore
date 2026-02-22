@@ -9,8 +9,8 @@ managed_components/
 .CLAUDE.md
 build_log.txt
 monitor_log.txt
-tools/monitor/logs/
+tools/monitor/logs/*
 tools/monitor/__pycache__
 .last_on_claude.md
 CLAUDE.md
-.worktrees/
+
