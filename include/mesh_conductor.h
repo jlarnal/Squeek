@@ -21,6 +21,9 @@ enum MeshMsgType : uint8_t {
     MSG_TYPE_CONFIG_REQ  = 0x50,   // any node → target node
     MSG_TYPE_CONFIG_RESP = 0x51,   // target node → requester
     MSG_TYPE_ROLE_CHANGE = 0x60,   // gateway → all (new gateway MAC)
+    MSG_TYPE_PLAY_CMD    = 0x70,   // gateway → node: play tone
+    MSG_TYPE_ORCH_MODE   = 0x71,   // gateway → all: mode changed
+    MSG_TYPE_CLOCK_SYNC  = 0x72,   // gateway → all: time sync
 };
 
 // --- Election score broadcast packet ---
@@ -118,6 +121,23 @@ struct __attribute__((packed)) NominateMsg {
 struct __attribute__((packed)) RoleChangeMsg {
     uint8_t type;        // MSG_TYPE_ROLE_CHANGE
     uint8_t new_gw[6];   // STA MAC of new gateway
+};
+
+// --- Phase 4: Orchestrator messages ---
+
+struct __attribute__((packed)) PlayCmdMsg {
+    uint8_t  type;           // MSG_TYPE_PLAY_CMD
+    uint8_t  tone_index;     // ToneLibrary index
+};
+
+struct __attribute__((packed)) OrchModeMsg {
+    uint8_t  type;           // MSG_TYPE_ORCH_MODE
+    uint8_t  mode;           // OrchMode enum value
+};
+
+struct __attribute__((packed)) ClockSyncMsg {
+    uint8_t  type;           // MSG_TYPE_CLOCK_SYNC
+    uint32_t gateway_ms;     // gateway's millis()
 };
 
 // --- IMeshRole abstract interface ---

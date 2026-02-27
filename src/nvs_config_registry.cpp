@@ -25,6 +25,12 @@ static const ConfigField s_fields[] = {
     { NVS_KEY_FTM_SWP,   "FTM sweep interval (s)",      CFG_U32   },
     { NVS_KEY_FTM_KPN,   "FTM Kalman process noise",    CFG_FLOAT },
     { NVS_KEY_FTM_OFS,   "FTM responder offset (cm)",   CFG_U32   },
+    { NVS_KEY_ORCH_MODE, "Orchestrator mode",            CFG_U32   },
+    { NVS_KEY_ORCH_TRVD, "Orch travel delay (ms)",       CFG_U32   },
+    { NVS_KEY_ORCH_RMIN, "Orch random min (ms)",         CFG_U32   },
+    { NVS_KEY_ORCH_RMAX, "Orch random max (ms)",         CFG_U32   },
+    { NVS_KEY_ORCH_TONE, "Orch tone index",              CFG_U32   },
+    { NVS_KEY_CSYNC_INT, "Clock sync interval (s)",      CFG_U32   },
 };
 static constexpr uint8_t FIELD_COUNT = sizeof(s_fields) / sizeof(s_fields[0]);
 
@@ -51,6 +57,12 @@ static void getField(JsonDocument& doc, const ConfigField& f) {
     if (strcmp(f.key, NVS_KEY_FTM_SWP) == 0)    { doc[f.key] = (uint32_t)NvsConfigManager::ftmSweepInterval_s; return; }
     if (strcmp(f.key, NVS_KEY_FTM_KPN) == 0)    { doc[f.key] = (float)NvsConfigManager::ftmKalmanProcessNoise; return; }
     if (strcmp(f.key, NVS_KEY_FTM_OFS) == 0)    { doc[f.key] = (uint32_t)NvsConfigManager::ftmResponderOffset_cm; return; }
+    if (strcmp(f.key, NVS_KEY_ORCH_MODE) == 0) { doc[f.key] = (uint32_t)NvsConfigManager::orchMode; return; }
+    if (strcmp(f.key, NVS_KEY_ORCH_TRVD) == 0) { doc[f.key] = (uint32_t)NvsConfigManager::orchTravelDelay_ms; return; }
+    if (strcmp(f.key, NVS_KEY_ORCH_RMIN) == 0) { doc[f.key] = (uint32_t)NvsConfigManager::orchRandomMin_ms; return; }
+    if (strcmp(f.key, NVS_KEY_ORCH_RMAX) == 0) { doc[f.key] = (uint32_t)NvsConfigManager::orchRandomMax_ms; return; }
+    if (strcmp(f.key, NVS_KEY_ORCH_TONE) == 0) { doc[f.key] = (uint32_t)NvsConfigManager::orchToneIndex; return; }
+    if (strcmp(f.key, NVS_KEY_CSYNC_INT) == 0) { doc[f.key] = (uint32_t)NvsConfigManager::clockSyncInterval_s; return; }
 }
 
 // --- Setter helper: apply a JSON value to the matching PropertyValue ---
@@ -76,6 +88,12 @@ static bool setField(const char* key, JsonVariantConst val) {
     if (strcmp(key, NVS_KEY_FTM_SWP) == 0)    { NvsConfigManager::ftmSweepInterval_s = val.as<uint32_t>(); return true; }
     if (strcmp(key, NVS_KEY_FTM_KPN) == 0)    { NvsConfigManager::ftmKalmanProcessNoise = val.as<float>(); return true; }
     if (strcmp(key, NVS_KEY_FTM_OFS) == 0)    { NvsConfigManager::ftmResponderOffset_cm = val.as<uint32_t>(); return true; }
+    if (strcmp(key, NVS_KEY_ORCH_MODE) == 0) { NvsConfigManager::orchMode = val.as<uint32_t>(); return true; }
+    if (strcmp(key, NVS_KEY_ORCH_TRVD) == 0) { NvsConfigManager::orchTravelDelay_ms = val.as<uint32_t>(); return true; }
+    if (strcmp(key, NVS_KEY_ORCH_RMIN) == 0) { NvsConfigManager::orchRandomMin_ms = val.as<uint32_t>(); return true; }
+    if (strcmp(key, NVS_KEY_ORCH_RMAX) == 0) { NvsConfigManager::orchRandomMax_ms = val.as<uint32_t>(); return true; }
+    if (strcmp(key, NVS_KEY_ORCH_TONE) == 0) { NvsConfigManager::orchToneIndex = val.as<uint32_t>(); return true; }
+    if (strcmp(key, NVS_KEY_CSYNC_INT) == 0) { NvsConfigManager::clockSyncInterval_s = val.as<uint32_t>(); return true; }
     return false;
 }
 

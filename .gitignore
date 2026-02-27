@@ -13,4 +13,5 @@ tools/monitor/logs/*
 tools/monitor/__pycache__
 .last_on_claude.md
 CLAUDE.md
+phase_4.md
 

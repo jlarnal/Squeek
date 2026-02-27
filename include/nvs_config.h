@@ -22,6 +22,14 @@ inline constexpr char NVS_KEY_HB_INT[]    = "hbInt";
 inline constexpr char NVS_KEY_HB_STALE[]  = "hbStale";
 inline constexpr char NVS_KEY_REEL_DMV[]  = "reelDmv";
 
+// Phase 4: Orchestrator
+inline constexpr char NVS_KEY_ORCH_MODE[]  = "orchMode";
+inline constexpr char NVS_KEY_ORCH_TRVD[]  = "orchTrvD";
+inline constexpr char NVS_KEY_ORCH_RMIN[]  = "orchRMin";
+inline constexpr char NVS_KEY_ORCH_RMAX[]  = "orchRMax";
+inline constexpr char NVS_KEY_ORCH_TONE[]  = "orchTone";
+inline constexpr char NVS_KEY_CSYNC_INT[]  = "csyncInt";
+
 // Phase 2: FTM
 inline constexpr char NVS_KEY_FTM_STALE[] = "ftmStale";
 inline constexpr char NVS_KEY_FTM_ANCH[]  = "ftmAnch";
@@ -48,6 +56,14 @@ inline constexpr uint32_t DEFAULT_CLR_DISCONNECTED   = NVS_DEFAULT_CLR_DISCONNEC
 inline constexpr uint32_t DEFAULT_HB_INTERVAL_S      = NVS_DEFAULT_HB_INTERVAL_S;
 inline constexpr uint8_t  DEFAULT_HB_STALE_MULT      = NVS_DEFAULT_HB_STALE_MULT;
 inline constexpr uint16_t DEFAULT_REELECT_DELTA_MV   = NVS_DEFAULT_REELECT_DELTA_MV;
+
+// Phase 4: Orchestrator defaults
+inline constexpr uint32_t DEFAULT_ORCH_MODE           = NVS_DEFAULT_ORCH_MODE;
+inline constexpr uint32_t DEFAULT_ORCH_TRAVEL_DELAY   = NVS_DEFAULT_ORCH_TRAVEL_DELAY;
+inline constexpr uint32_t DEFAULT_ORCH_RANDOM_MIN     = NVS_DEFAULT_ORCH_RANDOM_MIN;
+inline constexpr uint32_t DEFAULT_ORCH_RANDOM_MAX     = NVS_DEFAULT_ORCH_RANDOM_MAX;
+inline constexpr uint32_t DEFAULT_ORCH_TONE_INDEX     = NVS_DEFAULT_ORCH_TONE_INDEX;
+inline constexpr uint32_t DEFAULT_CSYNC_INTERVAL_S    = NVS_DEFAULT_CSYNC_INTERVAL_S;
 
 // Phase 2: FTM defaults
 inline constexpr uint32_t DEFAULT_FTM_STALE_S        = NVS_DEFAULT_FTM_STALE_S;
@@ -115,6 +131,13 @@ namespace nvs_detail {
         h = fnvU32(h, DEFAULT_FTM_SWEEP_INT_S);
         h = fnvFloat(h, DEFAULT_FTM_KALMAN_PN);
         h = fnvU32(h, (uint32_t)(uint16_t)DEFAULT_FTM_RESP_OFS_CM);
+        // Phase 4
+        h = fnvU32(h, DEFAULT_ORCH_MODE);
+        h = fnvU32(h, DEFAULT_ORCH_TRAVEL_DELAY);
+        h = fnvU32(h, DEFAULT_ORCH_RANDOM_MIN);
+        h = fnvU32(h, DEFAULT_ORCH_RANDOM_MAX);
+        h = fnvU32(h, DEFAULT_ORCH_TONE_INDEX);
+        h = fnvU32(h, DEFAULT_CSYNC_INTERVAL_S);
         return h;
     }
 }
@@ -168,6 +191,14 @@ public:
     static PropertyValue<NVS_KEY_FTM_SWP,   uint32_t, NvsConfigManager> ftmSweepInterval_s;
     static PropertyValue<NVS_KEY_FTM_KPN,   float,    NvsConfigManager> ftmKalmanProcessNoise;
     static PropertyValue<NVS_KEY_FTM_OFS,   uint32_t, NvsConfigManager> ftmResponderOffset_cm;
+
+    // Phase 4: Orchestrator
+    static PropertyValue<NVS_KEY_ORCH_MODE, uint32_t, NvsConfigManager> orchMode;
+    static PropertyValue<NVS_KEY_ORCH_TRVD, uint32_t, NvsConfigManager> orchTravelDelay_ms;
+    static PropertyValue<NVS_KEY_ORCH_RMIN, uint32_t, NvsConfigManager> orchRandomMin_ms;
+    static PropertyValue<NVS_KEY_ORCH_RMAX, uint32_t, NvsConfigManager> orchRandomMax_ms;
+    static PropertyValue<NVS_KEY_ORCH_TONE, uint32_t, NvsConfigManager> orchToneIndex;
+    static PropertyValue<NVS_KEY_CSYNC_INT, uint32_t, NvsConfigManager> clockSyncInterval_s;
 };
 
 #endif // NVS_CONFIG_H

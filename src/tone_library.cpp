@@ -60,6 +60,20 @@ static constexpr int TONE_COUNT = sizeof(s_tones) / sizeof(s_tones[0]);
 
 // --- Public API ---
 
+const ToneSequence* ToneLibrary::getByIndex(uint8_t index) {
+    if (index >= TONE_COUNT) return nullptr;
+    return &s_tones[index].seq;
+}
+
+uint8_t ToneLibrary::count() {
+    return TONE_COUNT;
+}
+
+const char* ToneLibrary::nameByIndex(uint8_t index) {
+    if (index >= TONE_COUNT) return nullptr;
+    return s_tones[index].name;
+}
+
 const ToneSequence* ToneLibrary::get(const char* name) {
     for (int i = 0; i < TONE_COUNT; i++) {
         if (strcasecmp(name, s_tones[i].name) == 0) {

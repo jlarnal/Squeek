@@ -7,6 +7,8 @@
 #include "nvs_config.h"
 #include "bsp.hpp"
 #include "sq_log.h"
+#include "orchestrator.h"
+#include "clock_sync.h"
 #include <Arduino.h>
 
 // Gateway self-heartbeat timer — updates own battery in PeerTable
@@ -26,6 +28,7 @@ void Gateway::begin() {
     FtmManager::init();
     PositionSolver::init();
     FtmScheduler::init();
+    ClockSync::init();
 
     // Start self-heartbeat timer (update own battery in PeerTable)
     uint32_t hbInterval = (uint32_t)NvsConfigManager::heartbeatInterval_s;
@@ -44,6 +47,9 @@ void Gateway::end() {
     if (s_gwHeartbeatTimer) {
         xTimerStop(s_gwHeartbeatTimer, 0);
     }
+
+    Orchestrator::setMode(ORCH_OFF);
+    ClockSync::stop();
 
     FtmScheduler::shutdown();
     PeerTable::shutdown();

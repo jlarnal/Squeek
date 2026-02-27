@@ -23,6 +23,9 @@ class ToneLibrary {
 public:
     ToneLibrary() = delete;
     static const ToneSequence* get(const char* name);
+    static const ToneSequence* getByIndex(uint8_t index);
+    static uint8_t count();
+    static const char* nameByIndex(uint8_t index);
     static void list(Print& out);
 };
 

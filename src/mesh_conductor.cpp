@@ -8,6 +8,8 @@
 #include "power_manager.h"
 #include "nvs_config.h"
 #include "sq_log.h"
+#include "orchestrator.h"
+#include "clock_sync.h"
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <string.h>
@@ -562,6 +564,19 @@ static void meshRxTask(void* pvParameters) {
                         nom->mac[3], nom->mac[4], nom->mac[5]);
                     MeshConductor::nominateNode(nom->mac);
                 }
+            }
+            // Phase 4: Orchestrator messages
+            else if (msgType == MSG_TYPE_PLAY_CMD && data.size >= sizeof(PlayCmdMsg)) {
+                PlayCmdMsg* play = (PlayCmdMsg*)rx_buf;
+                Orchestrator::onPlayCmd(play->tone_index);
+            }
+            else if (msgType == MSG_TYPE_ORCH_MODE && data.size >= sizeof(OrchModeMsg)) {
+                OrchModeMsg* om = (OrchModeMsg*)rx_buf;
+                Orchestrator::onModeChange(om->mode);
+            }
+            else if (msgType == MSG_TYPE_CLOCK_SYNC && data.size >= sizeof(ClockSyncMsg)) {
+                ClockSyncMsg* cs = (ClockSyncMsg*)rx_buf;
+                ClockSync::onSyncReceived(cs->gateway_ms);
             }
         }
 

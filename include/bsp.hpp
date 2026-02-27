@@ -77,7 +77,15 @@ constexpr gpio_num_t PIEZO_PIN_B = GPIO_NUM_23;  // push-pull complement
 #define NVS_DEFAULT_FTM_KALMAN_PN      0.01f
 #define NVS_DEFAULT_FTM_RESP_OFS_CM    0
 
-// Mesh config  
+// Phase 4: Orchestrator
+#define NVS_DEFAULT_ORCH_MODE          0
+#define NVS_DEFAULT_ORCH_TRAVEL_DELAY  500
+#define NVS_DEFAULT_ORCH_RANDOM_MIN    3000
+#define NVS_DEFAULT_ORCH_RANDOM_MAX    15000
+#define NVS_DEFAULT_ORCH_TONE_INDEX    0
+#define NVS_DEFAULT_CSYNC_INTERVAL_S   10
+
+// Mesh config
 #define MESH_MAX_NODES       16
 #define MESH_CHANNEL         1
 #define MESH_MAX_LAYER       4

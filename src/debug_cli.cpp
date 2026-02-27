@@ -14,6 +14,8 @@
 #include "audio_engine.h"
 #include "audio_tweeter.h"
 #include "tone_library.h"
+#include "orchestrator.h"
+#include "clock_sync.h"
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <esp_system.h>
@@ -40,6 +42,7 @@ static void cmd_tone(const char* args);
 static void cmd_config(const char* args);
 static void cmd_mode(const char* args);
 static void cmd_status(const char* args);
+static void cmd_orch(const char* args);
 static void cmd_reboot(const char* args);
 
 // --- Command table ---
@@ -68,6 +71,7 @@ static const CliCommand s_commands[] = {
     { "broadcast", cmd_broadcast, "Broadcast positions to all nodes" },
     { "quiet",     cmd_quiet,     "Toggle background output suppression" },
     { "status",    cmd_status,    "Print mesh state, role, battery, peers" },
+    { "orch",      cmd_orch,      "Orchestrator: travel|random|seq|sched|stop|status" },
     { "reboot",    cmd_reboot,    "Reboot (esp_restart)" },
 };
 static constexpr int CMD_COUNT = sizeof(s_commands) / sizeof(s_commands[0]);
@@ -757,6 +761,117 @@ static void cmd_status(const char* args) {
     Serial.printf("Role: %s\n", MeshConductor::isGateway() ? "GATEWAY" : "NODE");
     if (MeshConductor::isConnected()) {
         MeshConductor::printStatus();
+    }
+}
+
+static void cmd_orch(const char* args) {
+    if (!args || !*args) {
+        Orchestrator::printStatus(Serial);
+        return;
+    }
+
+    char buf[64];
+    strncpy(buf, args, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+
+    char* sub = strtok(buf, " ");
+    char* arg1 = strtok(nullptr, " ");
+    char* arg2 = strtok(nullptr, " ");
+    char* arg3 = strtok(nullptr, " ");
+
+    if (strcasecmp(sub, "travel") == 0) {
+        if (!MeshConductor::isGateway()) {
+            Serial.println("Not gateway — travel mode only runs on gateway");
+            return;
+        }
+        TravelOrder order = TRAVEL_NEAREST;
+        if (arg1) {
+            if (strcasecmp(arg1, "axis") == 0) order = TRAVEL_AXIS;
+            else if (strcasecmp(arg1, "random") == 0) order = TRAVEL_RANDOM;
+        }
+        Orchestrator::setTravelOrder(order);
+        Orchestrator::setMode(ORCH_TRAVEL);
+    }
+    else if (strcasecmp(sub, "random") == 0) {
+        if (!MeshConductor::isGateway()) {
+            Serial.println("Not gateway — random mode only runs on gateway");
+            return;
+        }
+        Orchestrator::setMode(ORCH_RANDOM);
+    }
+    else if (strcasecmp(sub, "seq") == 0) {
+        if (!arg1) {
+            Serial.println("Usage: orch seq list|add|clear|save|load|play");
+            return;
+        }
+        if (strcasecmp(arg1, "list") == 0) {
+            uint8_t cnt = Orchestrator::sequenceCount();
+            Serial.printf("Sequence: %u steps\n", cnt);
+            const SeqStep* steps = Orchestrator::sequenceSteps();
+            for (uint8_t i = 0; i < cnt; i++) {
+                const char* tn = ToneLibrary::nameByIndex(steps[i].tone_index);
+                Serial.printf("  [%u] node=%u tone=%u(%s) delay=%u ms\n",
+                    i, steps[i].node_index, steps[i].tone_index,
+                    tn ? tn : "?", steps[i].delay_ms);
+            }
+        }
+        else if (strcasecmp(arg1, "add") == 0) {
+            // arg2=node, arg3=tone; need one more token for delay
+            if (!arg2 || !arg3) {
+                Serial.println("Usage: orch seq add <node> <tone> <delay>");
+                return;
+            }
+            char* arg4 = strtok(nullptr, " ");
+            uint8_t node = atoi(arg2);
+            uint8_t tone = atoi(arg3);
+            uint16_t delay = arg4 ? atoi(arg4) : 500;
+            Orchestrator::addSequenceStep(node, tone, delay);
+            Serial.printf("Added step: node=%u tone=%u delay=%u\n", node, tone, delay);
+        }
+        else if (strcasecmp(arg1, "clear") == 0) {
+            Orchestrator::clearSequence();
+            Serial.println("Sequence cleared");
+        }
+        else if (strcasecmp(arg1, "save") == 0) {
+            Orchestrator::saveSequence();
+        }
+        else if (strcasecmp(arg1, "load") == 0) {
+            Orchestrator::loadSequence();
+        }
+        else if (strcasecmp(arg1, "play") == 0) {
+            if (!MeshConductor::isGateway()) {
+                Serial.println("Not gateway");
+                return;
+            }
+            Orchestrator::setMode(ORCH_SEQUENCE);
+        }
+    }
+    else if (strcasecmp(sub, "sched") == 0) {
+        if (!arg1) {
+            Serial.println("Usage: orch sched <ms> <mode> | orch sched cancel");
+            return;
+        }
+        if (strcasecmp(arg1, "cancel") == 0) {
+            Orchestrator::cancelSchedule();
+        } else {
+            uint32_t delayMs = atoi(arg1);
+            OrchMode mode = ORCH_RANDOM;
+            if (arg2) {
+                if (strcasecmp(arg2, "travel") == 0)   mode = ORCH_TRAVEL;
+                else if (strcasecmp(arg2, "random") == 0)  mode = ORCH_RANDOM;
+                else if (strcasecmp(arg2, "seq") == 0)     mode = ORCH_SEQUENCE;
+            }
+            Orchestrator::scheduleRelative(delayMs, mode);
+        }
+    }
+    else if (strcasecmp(sub, "stop") == 0) {
+        Orchestrator::setMode(ORCH_OFF);
+    }
+    else if (strcasecmp(sub, "status") == 0) {
+        Orchestrator::printStatus(Serial);
+    }
+    else {
+        Serial.println("Usage: orch travel|random|seq|sched|stop|status");
     }
 }
 

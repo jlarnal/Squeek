@@ -184,7 +184,7 @@ Each node maintains a local map of the mesh it belongs to, stored in two tiers:
 | **Orchestrator** | `orchestrator.h/cpp`, `clock_sync.h/cpp` | Play modes, sequence execution, mesh clock sync, scheduling |
 | **Gateway Services** | `web_server.h/cpp` | Web server, SoftAP, REST API, UI assets (active on elected gateway only) |
 | **Stealth & OTA** | `stealth_manager.h/cpp`, `ota_manager.h/cpp` | Stealth mode (hide AP), OTA firmware updates |
-| **Debug CLI** | `debug_cli.h/cpp` | Always-on serial CLI (FreeRTOS task), Tab-cycle command history, interactive tone player |
+| **Debug CLI** | `debug_cli.h/cpp` | Always-on serial CLI (FreeRTOS task), Tab-cycle command history, interactive tone player, orchestrator control |
 
 ### Node Lifecycle State Machine
 
@@ -243,7 +243,7 @@ LOW_BATTERY → DEEP_SLEEP (timer-only wake for periodic check)
 - [x] Light sleep between heartbeats (via `SQ_POWER_DELAY` macro, suppressed in debug builds)
 - [x] RTC slow-memory mesh map with checksummed save/restore (`RtcMap`)
 - [x] NvsConfigManager with `PropertyValue<>` auto-persistence, compile-time settings hash, factory reset
-- [x] Debug CLI — always-on serial CLI with 18 text commands, Tab-cycle history, interactive tone player
+- [x] Debug CLI — always-on serial CLI with 19 text commands, Tab-cycle history, interactive tone player
 - **Deliverable:** Scatter nodes, they find each other. Kill the gateway, another takes over. Serial CLI for hardware testing.
 
 ### Phase 2 — FTM Localization
@@ -269,13 +269,19 @@ LOW_BATTERY → DEEP_SLEEP (timer-only wake for periodic check)
 - LittleFS sample storage (upload via serial, future)
 - **Deliverable:** Node plays a chirp on command via `tone` CLI command.
 
-### Phase 4 — Orchestrator & Play Modes
+### Phase 4 — Orchestrator & Play Modes  ✅ IMPLEMENTED
 **Goal:** Coordinated sound across the flotilla.
 
-- Traveling sound: gateway computes spatial path from 3D positions, sequences nodes
-- Random pop-up: gateway assigns random triggers to random nodes
-- Triggered sequences: user defines (node, sound, delay) tuples
-- Time-synchronized playback using mesh clock sync
+- [x] ClockSync — gateway broadcasts `millis()` offset at NVS-tunable interval; peers track offset for mesh-wide time
+- [x] Orchestrator FreeRTOS task (4KB stack, tskIDLE+2) driven by event queue (depth 4)
+- [x] **Travel mode** — gateway computes spatial path from PeerTable, sends `PlayCmdMsg` to each node in sequence; 3 sub-modes: nearest-neighbor (greedy via FTM distances), axis sweep (sort by X position), random permutation (Fisher-Yates)
+- [x] **Random popup** — random alive node plays at random interval (NVS min/max bounds)
+- [x] **Sequence mode** — user-defined `(node, tone, delay)` steps (max 32), NVS-persisted blob, loops on playback
+- [x] **Scheduled triggers** — relative-delay one-shot FreeRTOS timer fires mode activation
+- [x] 3 new mesh message types (`PLAY_CMD`, `ORCH_MODE`, `CLOCK_SYNC`) + packed structs
+- [x] 6 new NVS keys (orchMode, orchTrvD, orchRMin, orchRMax, orchTone, csyncInt)
+- [x] Gateway role transfer safety — `Gateway::end()` stops orchestration + clock sync; `Gateway::begin()` re-inits clock sync
+- [x] CLI `orch` command with 12 sub-commands (travel, random, seq list/add/clear/save/load/play, sched, stop, status)
 - **Deliverable:** Trigger "chase mode" — sound runs across nodes following physical layout.
 
 ### Phase 5 — Web UI
@@ -364,14 +370,14 @@ LOW_BATTERY → DEEP_SLEEP (timer-only wake for periodic check)
 | `include/sample_player.h` | MP3 sample decoder (libhelix) | Stub |
 | `src/sample_player.cpp` | LittleFS read → MP3 decode → audio output | Stub |
 
-### Phase 4 — Orchestrator (stub)
+### Phase 4 — Orchestrator (implemented)
 
 | File | Purpose | Status |
 |------|---------|--------|
-| `include/orchestrator.h` | Play mode coordinator — traveling sound, random pop-up, triggered sequences | Stub |
-| `src/orchestrator.cpp` | Spatial path computation, sequence execution | Stub |
-| `include/clock_sync.h` | Mesh clock synchronization | Stub |
-| `src/clock_sync.cpp` | NTP or mesh-internal time sync for coordinated playback | Stub |
+| `include/orchestrator.h` | `Orchestrator` static class — `OrchMode`/`TravelOrder` enums, `SeqStep` struct, play mode coordinator | Done |
+| `src/orchestrator.cpp` | FreeRTOS task + event queue, travel/random/sequence/scheduled modes, NVS blob persistence, spatial path builders | Done |
+| `include/clock_sync.h` | `ClockSync` static class — gateway timer broadcast, peer offset tracking | Done |
+| `src/clock_sync.cpp` | FreeRTOS software timer, `millis()` offset sync, `meshTime()` API | Done |
 
 ### Phase 5 — Web UI (stub)
 
@@ -660,6 +666,7 @@ An always-on serial CLI for in-situ hardware and firmware testing. Runs as a Fre
 | `broadcast` | Broadcast positions to all nodes |
 | `quiet` | Toggle background output suppression |
 | `status` | Print mesh state, role, battery, peers |
+| `orch` | Orchestrator control: `travel`, `random`, `seq`, `sched`, `stop`, `status` |
 | `reboot` | Reboot (`esp_restart`) |
 
 ### A.4 Tone Player Sub-Mode

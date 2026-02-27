@@ -20,9 +20,13 @@ Phase 2 delivers: PeerTable (IRAM working map with 16-node capacity), heartbeat 
 
 Phase 3 delivers: LEDC PWM + GPTimer tone engine (Mozzi removed — incompatible with ESP32-C6 single-core RISC-V). PiezoDriver (push-pull complementary LEDC on GPIO22/GPIO23), AudioEngine (GPTimer ISR at 200 Hz, fixed-point envelope interpolation), ToneLibrary (6 built-in tones: chirp, chirp_down, squeak, warble, alert, fade_chirp), IAudioOutput interface for future I2S DAC.
 
-**Debug CLI: COMPLETE** — Always-on serial CLI (FreeRTOS task, non-blocking). 18 text commands: help, led, battery, wifi, mesh, elect, rtc, sleep, peers, tone, config, mode, ftm, sweep, solve, broadcast, quiet, status, reboot. Tab-cycles last 3 successful commands as history. Interactive `tone` command with ASCII numpad (keys 1-6 play tones, 0 stops, `.` quits). SqLog wrapper gates background output through quiet-mode flag (also suppresses ESP_LOG via esp_log_set_vprintf).
+**Phase 4 — Orchestrator: IMPLEMENTED** (compiles clean, needs hardware verification)
 
-**Next: Phase 4 — Orchestrator** — Coordinated sound across the flotilla (traveling sound, random pop-up, triggered sequences).
+Phase 4 delivers: ClockSync (gateway millis() broadcast, peer offset tracking), Orchestrator FreeRTOS task (4KB stack, event-driven queue), 4 play modes (travel with nearest/axis/random paths, random popup, NVS-persisted sequences up to 32 steps, scheduled triggers), 3 new mesh message types (PLAY_CMD, ORCH_MODE, CLOCK_SYNC), 6 new NVS parameters, gateway role transfer safety, CLI `orch` command with 12 sub-commands.
+
+**Debug CLI: COMPLETE** — Always-on serial CLI (FreeRTOS task, non-blocking). 19 text commands: help, led, battery, wifi, mesh, elect, rtc, sleep, peers, tone, config, mode, ftm, sweep, solve, broadcast, quiet, status, orch, reboot. Tab-cycles last 3 successful commands as history. Interactive `tone` command with ASCII numpad (keys 1-6 play tones, 0 stops, `.` quits). SqLog wrapper gates background output through quiet-mode flag (also suppresses ESP_LOG via esp_log_set_vprintf).
+
+**Next: Phase 5 — Web UI** — Browser-based control from a phone (SoftAP, REST API, 3D topology map, sequence designer).
 
 ## Tools
 

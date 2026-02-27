@@ -39,6 +39,14 @@ PropertyValue<NVS_KEY_FTM_SWP,   uint32_t, NvsConfigManager> NvsConfigManager::f
 PropertyValue<NVS_KEY_FTM_KPN,   float,    NvsConfigManager> NvsConfigManager::ftmKalmanProcessNoise(DEFAULT_FTM_KALMAN_PN);
 PropertyValue<NVS_KEY_FTM_OFS,   uint32_t, NvsConfigManager> NvsConfigManager::ftmResponderOffset_cm(DEFAULT_FTM_RESP_OFS_CM);
 
+// Phase 4: Orchestrator
+PropertyValue<NVS_KEY_ORCH_MODE, uint32_t, NvsConfigManager> NvsConfigManager::orchMode(DEFAULT_ORCH_MODE);
+PropertyValue<NVS_KEY_ORCH_TRVD, uint32_t, NvsConfigManager> NvsConfigManager::orchTravelDelay_ms(DEFAULT_ORCH_TRAVEL_DELAY);
+PropertyValue<NVS_KEY_ORCH_RMIN, uint32_t, NvsConfigManager> NvsConfigManager::orchRandomMin_ms(DEFAULT_ORCH_RANDOM_MIN);
+PropertyValue<NVS_KEY_ORCH_RMAX, uint32_t, NvsConfigManager> NvsConfigManager::orchRandomMax_ms(DEFAULT_ORCH_RANDOM_MAX);
+PropertyValue<NVS_KEY_ORCH_TONE, uint32_t, NvsConfigManager> NvsConfigManager::orchToneIndex(DEFAULT_ORCH_TONE_INDEX);
+PropertyValue<NVS_KEY_CSYNC_INT, uint32_t, NvsConfigManager> NvsConfigManager::clockSyncInterval_s(DEFAULT_CSYNC_INTERVAL_S);
+
 // NVS read helpers
 
 static bool nvsGetBool(const char* key, bool defaultValue)
@@ -147,6 +155,14 @@ void NvsConfigManager::reloadFromNvs()
     ftmKalmanProcessNoise.loadInitial(nvsGetFloat(NVS_KEY_FTM_KPN, DEFAULT_FTM_KALMAN_PN));
     ftmResponderOffset_cm.loadInitial(nvsGetU32(NVS_KEY_FTM_OFS, DEFAULT_FTM_RESP_OFS_CM));
 
+    // Phase 4
+    orchMode.loadInitial(nvsGetU32(NVS_KEY_ORCH_MODE, DEFAULT_ORCH_MODE));
+    orchTravelDelay_ms.loadInitial(nvsGetU32(NVS_KEY_ORCH_TRVD, DEFAULT_ORCH_TRAVEL_DELAY));
+    orchRandomMin_ms.loadInitial(nvsGetU32(NVS_KEY_ORCH_RMIN, DEFAULT_ORCH_RANDOM_MIN));
+    orchRandomMax_ms.loadInitial(nvsGetU32(NVS_KEY_ORCH_RMAX, DEFAULT_ORCH_RANDOM_MAX));
+    orchToneIndex.loadInitial(nvsGetU32(NVS_KEY_ORCH_TONE, DEFAULT_ORCH_TONE_INDEX));
+    clockSyncInterval_s.loadInitial(nvsGetU32(NVS_KEY_CSYNC_INT, DEFAULT_CSYNC_INTERVAL_S));
+
     ESP_LOGI(TAG, "Config loaded from NVS");
 }
 
@@ -180,6 +196,14 @@ bool NvsConfigManager::restoreFactoryDefault(uint32_t safeKey)
     ftmSweepInterval_s        = (uint32_t)DEFAULT_FTM_SWEEP_INT_S;
     ftmKalmanProcessNoise     = DEFAULT_FTM_KALMAN_PN;
     ftmResponderOffset_cm     = (uint32_t)DEFAULT_FTM_RESP_OFS_CM;
+
+    // Phase 4
+    orchMode              = (uint32_t)DEFAULT_ORCH_MODE;
+    orchTravelDelay_ms    = (uint32_t)DEFAULT_ORCH_TRAVEL_DELAY;
+    orchRandomMin_ms      = (uint32_t)DEFAULT_ORCH_RANDOM_MIN;
+    orchRandomMax_ms      = (uint32_t)DEFAULT_ORCH_RANDOM_MAX;
+    orchToneIndex         = (uint32_t)DEFAULT_ORCH_TONE_INDEX;
+    clockSyncInterval_s   = (uint32_t)DEFAULT_CSYNC_INTERVAL_S;
 
     return true;
 }

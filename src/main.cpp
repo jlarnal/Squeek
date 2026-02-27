@@ -8,6 +8,7 @@
 #include "rtc_mesh_map.h"
 #include "audio_tweeter.h"
 #include "audio_engine.h"
+#include "orchestrator.h"
 
 #ifdef DEBUG_MENU_ENABLED
 #include "debug_cli.h"
@@ -35,6 +36,7 @@ void setup()
 
     PiezoDriver::instance().begin();
     AudioEngine::init(&PiezoDriver::instance());
+    Orchestrator::init();
 
     LedDriver::rgbSet(RgbColor(NvsConfigManager::colorReady)); // dim green = init done.
 }
