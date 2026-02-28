@@ -9,6 +9,7 @@
 #include "sq_log.h"
 #include "orchestrator.h"
 #include "clock_sync.h"
+#include "web_server.h"
 #include <Arduino.h>
 
 // Gateway self-heartbeat timer — updates own battery in PeerTable
@@ -39,10 +40,16 @@ void Gateway::begin() {
         xTimerChangePeriod(s_gwHeartbeatTimer, pdMS_TO_TICKS(hbInterval * 1000), 0);
     }
     xTimerStart(s_gwHeartbeatTimer, 0);
+
+    // Phase 5: Web UI
+    SqWebServer::start();
 }
 
 void Gateway::end() {
     SqLog.println("[gateway] Gateway role stopping");
+
+    // Phase 5: Web UI — stop before mesh teardown
+    SqWebServer::stop();
 
     if (s_gwHeartbeatTimer) {
         xTimerStop(s_gwHeartbeatTimer, 0);
