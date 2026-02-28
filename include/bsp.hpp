@@ -67,6 +67,8 @@ constexpr gpio_num_t PIEZO_PIN_B = GPIO_NUM_23;  // push-pull complement
 #define NVS_DEFAULT_HB_INTERVAL_S      30
 #define NVS_DEFAULT_HB_STALE_MULT      3
 #define NVS_DEFAULT_REELECT_DELTA_MV   200
+#define NVS_DEFAULT_REELECT_COOLDOWN_S 60
+#define NVS_DEFAULT_REELECT_DETHRONE_MV 300
 
 // Phase 2: FTM
 #define NVS_DEFAULT_FTM_STALE_S        300

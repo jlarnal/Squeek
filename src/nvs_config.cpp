@@ -29,6 +29,8 @@ PropertyValue<NVS_KEY_CLR_DISC, uint32_t, NvsConfigManager> NvsConfigManager::co
 PropertyValue<NVS_KEY_HB_INT,   uint32_t, NvsConfigManager> NvsConfigManager::heartbeatInterval_s(DEFAULT_HB_INTERVAL_S);
 PropertyValue<NVS_KEY_HB_STALE, uint32_t, NvsConfigManager> NvsConfigManager::heartbeatStaleMultiplier(DEFAULT_HB_STALE_MULT);
 PropertyValue<NVS_KEY_REEL_DMV, uint32_t, NvsConfigManager> NvsConfigManager::reelectionBatteryDelta_mv(DEFAULT_REELECT_DELTA_MV);
+PropertyValue<NVS_KEY_REEL_CD,  uint16_t, NvsConfigManager> NvsConfigManager::reelectionCooldown_s(DEFAULT_REELECT_COOLDOWN_S);
+PropertyValue<NVS_KEY_REEL_DTH, uint16_t, NvsConfigManager> NvsConfigManager::reelectionDethrone_mv(DEFAULT_REELECT_DETHRONE_MV);
 
 // Phase 2: FTM
 PropertyValue<NVS_KEY_FTM_STALE, uint32_t, NvsConfigManager> NvsConfigManager::ftmStaleness_s(DEFAULT_FTM_STALE_S);
@@ -82,6 +84,17 @@ static float nvsGetFloat(const char* key, float defaultValue)
     }
     if (err != ESP_ERR_NVS_NOT_FOUND)
         ESP_LOGE(TAG, "nvs_get_u32(%s) failed: %s", key, esp_err_to_name(err));
+    return defaultValue;
+}
+
+static uint16_t nvsGetU16(const char* key, uint16_t defaultValue)
+{
+    uint16_t v    = 0;
+    esp_err_t err = nvs_get_u16(NvsConfig::handle, key, &v);
+    if (err == ESP_OK)
+        return v;
+    if (err != ESP_ERR_NVS_NOT_FOUND)
+        ESP_LOGE(TAG, "nvs_get_u16(%s) failed: %s", key, esp_err_to_name(err));
     return defaultValue;
 }
 
@@ -147,6 +160,8 @@ void NvsConfigManager::reloadFromNvs()
     heartbeatInterval_s.loadInitial(nvsGetU32(NVS_KEY_HB_INT, DEFAULT_HB_INTERVAL_S));
     heartbeatStaleMultiplier.loadInitial(nvsGetU32(NVS_KEY_HB_STALE, DEFAULT_HB_STALE_MULT));
     reelectionBatteryDelta_mv.loadInitial(nvsGetU32(NVS_KEY_REEL_DMV, DEFAULT_REELECT_DELTA_MV));
+    reelectionCooldown_s.loadInitial(nvsGetU16(NVS_KEY_REEL_CD, DEFAULT_REELECT_COOLDOWN_S));
+    reelectionDethrone_mv.loadInitial(nvsGetU16(NVS_KEY_REEL_DTH, DEFAULT_REELECT_DETHRONE_MV));
     ftmStaleness_s.loadInitial(nvsGetU32(NVS_KEY_FTM_STALE, DEFAULT_FTM_STALE_S));
     ftmNewNodeAnchors.loadInitial(nvsGetU32(NVS_KEY_FTM_ANCH, DEFAULT_FTM_NEW_ANCHORS));
     ftmSamplesPerPair.loadInitial(nvsGetU32(NVS_KEY_FTM_SAMP, DEFAULT_FTM_SAMPLES));
@@ -189,6 +204,8 @@ bool NvsConfigManager::restoreFactoryDefault(uint32_t safeKey)
     heartbeatInterval_s       = (uint32_t)DEFAULT_HB_INTERVAL_S;
     heartbeatStaleMultiplier  = (uint32_t)DEFAULT_HB_STALE_MULT;
     reelectionBatteryDelta_mv = (uint32_t)DEFAULT_REELECT_DELTA_MV;
+    reelectionCooldown_s      = DEFAULT_REELECT_COOLDOWN_S;
+    reelectionDethrone_mv     = DEFAULT_REELECT_DETHRONE_MV;
     ftmStaleness_s            = (uint32_t)DEFAULT_FTM_STALE_S;
     ftmNewNodeAnchors         = (uint32_t)DEFAULT_FTM_NEW_ANCHORS;
     ftmSamplesPerPair         = (uint32_t)DEFAULT_FTM_SAMPLES;

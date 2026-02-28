@@ -18,6 +18,8 @@ static const ConfigField s_fields[] = {
     { NVS_KEY_HB_INT,    "Heartbeat interval (s)",      CFG_U32   },
     { NVS_KEY_HB_STALE,  "Heartbeat stale multiplier",  CFG_U32   },
     { NVS_KEY_REEL_DMV,  "Re-election battery delta (mV)", CFG_U32 },
+    { NVS_KEY_REEL_CD,   "Re-election cooldown (s)",      CFG_U32 },
+    { NVS_KEY_REEL_DTH,  "Re-election dethrone delta (mV)", CFG_U32 },
     { NVS_KEY_FTM_STALE, "FTM staleness (s)",           CFG_U32   },
     { NVS_KEY_FTM_ANCH,  "FTM new-node anchors",        CFG_U32   },
     { NVS_KEY_FTM_SAMP,  "FTM samples per pair",        CFG_U32   },
@@ -50,6 +52,8 @@ static void getField(JsonDocument& doc, const ConfigField& f) {
     if (strcmp(f.key, NVS_KEY_HB_INT) == 0)     { doc[f.key] = (uint32_t)NvsConfigManager::heartbeatInterval_s; return; }
     if (strcmp(f.key, NVS_KEY_HB_STALE) == 0)   { doc[f.key] = (uint32_t)NvsConfigManager::heartbeatStaleMultiplier; return; }
     if (strcmp(f.key, NVS_KEY_REEL_DMV) == 0)   { doc[f.key] = (uint32_t)NvsConfigManager::reelectionBatteryDelta_mv; return; }
+    if (strcmp(f.key, NVS_KEY_REEL_CD) == 0)    { doc[f.key] = (uint32_t)(uint16_t)NvsConfigManager::reelectionCooldown_s; return; }
+    if (strcmp(f.key, NVS_KEY_REEL_DTH) == 0)   { doc[f.key] = (uint32_t)(uint16_t)NvsConfigManager::reelectionDethrone_mv; return; }
     if (strcmp(f.key, NVS_KEY_FTM_STALE) == 0)  { doc[f.key] = (uint32_t)NvsConfigManager::ftmStaleness_s; return; }
     if (strcmp(f.key, NVS_KEY_FTM_ANCH) == 0)   { doc[f.key] = (uint32_t)NvsConfigManager::ftmNewNodeAnchors; return; }
     if (strcmp(f.key, NVS_KEY_FTM_SAMP) == 0)   { doc[f.key] = (uint32_t)NvsConfigManager::ftmSamplesPerPair; return; }
@@ -81,6 +85,19 @@ static bool setField(const char* key, JsonVariantConst val) {
     if (strcmp(key, NVS_KEY_HB_INT) == 0)     { NvsConfigManager::heartbeatInterval_s = val.as<uint32_t>(); return true; }
     if (strcmp(key, NVS_KEY_HB_STALE) == 0)   { NvsConfigManager::heartbeatStaleMultiplier = val.as<uint32_t>(); return true; }
     if (strcmp(key, NVS_KEY_REEL_DMV) == 0)   { NvsConfigManager::reelectionBatteryDelta_mv = val.as<uint32_t>(); return true; }
+    if (strcmp(key, NVS_KEY_REEL_CD) == 0)  {
+        uint16_t v = val.as<uint16_t>();
+        if (v < 30) v = 30;
+        NvsConfigManager::reelectionCooldown_s = v;
+        return true;
+    }
+    if (strcmp(key, NVS_KEY_REEL_DTH) == 0) {
+        uint16_t v = val.as<uint16_t>();
+        if (v < 50)   v = 50;
+        if (v > 1000)  v = 1000;
+        NvsConfigManager::reelectionDethrone_mv = v;
+        return true;
+    }
     if (strcmp(key, NVS_KEY_FTM_STALE) == 0)  { NvsConfigManager::ftmStaleness_s = val.as<uint32_t>(); return true; }
     if (strcmp(key, NVS_KEY_FTM_ANCH) == 0)   { NvsConfigManager::ftmNewNodeAnchors = val.as<uint32_t>(); return true; }
     if (strcmp(key, NVS_KEY_FTM_SAMP) == 0)   { NvsConfigManager::ftmSamplesPerPair = val.as<uint32_t>(); return true; }

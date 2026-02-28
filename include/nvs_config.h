@@ -21,6 +21,8 @@ inline constexpr char NVS_KEY_CLR_DISC[] = "clrDisc";
 inline constexpr char NVS_KEY_HB_INT[]    = "hbInt";
 inline constexpr char NVS_KEY_HB_STALE[]  = "hbStale";
 inline constexpr char NVS_KEY_REEL_DMV[]  = "reelDmv";
+inline constexpr char NVS_KEY_REEL_CD[]   = "reelCd";
+inline constexpr char NVS_KEY_REEL_DTH[]  = "reelDth";
 
 // Phase 4: Orchestrator
 inline constexpr char NVS_KEY_ORCH_MODE[]  = "orchMode";
@@ -56,6 +58,8 @@ inline constexpr uint32_t DEFAULT_CLR_DISCONNECTED   = NVS_DEFAULT_CLR_DISCONNEC
 inline constexpr uint32_t DEFAULT_HB_INTERVAL_S      = NVS_DEFAULT_HB_INTERVAL_S;
 inline constexpr uint8_t  DEFAULT_HB_STALE_MULT      = NVS_DEFAULT_HB_STALE_MULT;
 inline constexpr uint16_t DEFAULT_REELECT_DELTA_MV   = NVS_DEFAULT_REELECT_DELTA_MV;
+inline constexpr uint16_t DEFAULT_REELECT_COOLDOWN_S = NVS_DEFAULT_REELECT_COOLDOWN_S;
+inline constexpr uint16_t DEFAULT_REELECT_DETHRONE_MV = NVS_DEFAULT_REELECT_DETHRONE_MV;
 
 // Phase 4: Orchestrator defaults
 inline constexpr uint32_t DEFAULT_ORCH_MODE           = NVS_DEFAULT_ORCH_MODE;
@@ -124,6 +128,8 @@ namespace nvs_detail {
         h = fnvU32(h, DEFAULT_HB_INTERVAL_S);
         h = fnvByte(h, DEFAULT_HB_STALE_MULT);
         h = fnvU32(h, (uint32_t)DEFAULT_REELECT_DELTA_MV);
+        h = fnvU32(h, (uint32_t)DEFAULT_REELECT_COOLDOWN_S);
+        h = fnvU32(h, (uint32_t)DEFAULT_REELECT_DETHRONE_MV);
         h = fnvU32(h, DEFAULT_FTM_STALE_S);
         h = fnvByte(h, DEFAULT_FTM_NEW_ANCHORS);
         h = fnvByte(h, DEFAULT_FTM_SAMPLES);
@@ -182,6 +188,8 @@ public:
     static PropertyValue<NVS_KEY_HB_INT,   uint32_t, NvsConfigManager> heartbeatInterval_s;
     static PropertyValue<NVS_KEY_HB_STALE, uint32_t, NvsConfigManager> heartbeatStaleMultiplier;
     static PropertyValue<NVS_KEY_REEL_DMV, uint32_t, NvsConfigManager> reelectionBatteryDelta_mv;
+    static PropertyValue<NVS_KEY_REEL_CD,  uint16_t, NvsConfigManager> reelectionCooldown_s;
+    static PropertyValue<NVS_KEY_REEL_DTH, uint16_t, NvsConfigManager> reelectionDethrone_mv;
 
     // Phase 2: FTM
     static PropertyValue<NVS_KEY_FTM_STALE, uint32_t, NvsConfigManager> ftmStaleness_s;

@@ -15,6 +15,7 @@ static PeerEntry  s_entries[MESH_MAX_NODES];
 static uint8_t    s_count = 0;   // total slots in use (index 0 = gateway self)
 static TimerHandle_t s_stalenessTimer = nullptr;
 static uint32_t   s_lastBroadcastHash = 0;  // change-detection for broadcastSync
+static uint32_t   s_lastReelectionMs = 0;  // cooldown: millis() of last re-election trigger
 
 // --- Helpers ---
 
@@ -148,9 +149,15 @@ void PeerTable::scanStaleness() {
 }
 
 void PeerTable::checkReelection() {
+    // Cooldown: skip if too soon after the last re-election
+    uint32_t cooldown_ms = (uint32_t)(uint16_t)NvsConfigManager::reelectionCooldown_s * 1000u;
+    if (s_lastReelectionMs != 0 && (millis() - s_lastReelectionMs) < cooldown_ms)
+        return;
+
     uint16_t gw_battery = s_entries[0].battery_mv;
     uint16_t best_battery = 0;
-    uint16_t delta = (uint16_t)(uint32_t)NvsConfigManager::reelectionBatteryDelta_mv;
+    // Asymmetric threshold: dethrone requires a larger delta than initial election
+    uint16_t dethrone = (uint16_t)NvsConfigManager::reelectionDethrone_mv;
 
     for (uint8_t i = 1; i < s_count; i++) {
         if (s_entries[i].flags & PEER_STATUS_DEAD)
@@ -159,9 +166,10 @@ void PeerTable::checkReelection() {
             best_battery = s_entries[i].battery_mv;
     }
 
-    if (best_battery > gw_battery && (best_battery - gw_battery) >= delta) {
-        SqLog.printf("[ptable] Re-election: gateway battery %u mV, best peer %u mV (delta >= %u)\n",
-            gw_battery, best_battery, delta);
+    if (best_battery > gw_battery && (best_battery - gw_battery) >= dethrone) {
+        SqLog.printf("[ptable] Re-election: gateway battery %u mV, best peer %u mV (dethrone >= %u)\n",
+            gw_battery, best_battery, dethrone);
+        s_lastReelectionMs = millis();
         MeshConductor::forceReelection();
     }
 }
@@ -291,8 +299,8 @@ void PeerTable::print() {
     uint8_t own_mac[6];
     esp_read_mac(own_mac, ESP_MAC_WIFI_STA);
 
-    SqLog.println("=== Peer Table ===");
-    SqLog.printf("Entries: %u, Alive: %u, Dimension: %uD\n",
+    Serial.println("=== Peer Table ===");
+    Serial.printf("Entries: %u, Alive: %u, Dimension: %uD\n",
         s_count, alivePeerCount(), getDimension());
 
     for (uint8_t i = 0; i < s_count; i++) {
@@ -304,7 +312,7 @@ void PeerTable::print() {
         const char* suffix = (isGw && isSelf) ? " <-- Gateway, this" :
                              isGw             ? " <-- Gateway" :
                              isSelf           ? " <-- this" : "";
-        SqLog.printf("  [%u] %02X:%02X:%02X:%02X:%02X:%02X  bat=%umV  %s  pos=(%6.0f,%6.0f,%6.0f) conf=%.2f%s\n",
+        Serial.printf("  [%u] %02X:%02X:%02X:%02X:%02X:%02X  bat=%umV  %s  pos=(%6.0f,%6.0f,%6.0f) conf=%.2f%s\n",
             i, e->mac[0], e->mac[1], e->mac[2], e->mac[3], e->mac[4], e->mac[5],
             e->battery_mv, status, e->position[0], e->position[1], e->position[2],
             e->confidence, suffix);

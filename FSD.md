@@ -86,15 +86,16 @@ Nodes use WiFi FTM to build a 3D spatial map of the flotilla without any manual 
 - **Traveling sound** — sound hops across nodes following the physical 3D layout (spatial path computed by gateway)
 - **Random pop-up** — random nodes emit sounds at random intervals
 - **Triggered sequences** — user-defined patterns of (node, sound, delay) tuples launched from web UI
-- **Scheduled triggers** — time-delayed or clock-based activation (for pranks)
+- **Scheduled triggers** — time-delayed or clock-based activation of the above 3 modes (for pranks or scheduled play times)
 
 ### FR6 — Web UI (served by gateway)
 - Upload and manage sound samples
 - Visualize node topology map in 3D (from FTM data)
-- Design and trigger play sequences visually
+- Design and trigger play sequences visually, taking advantage of the interactive 3D map as part of the UI to designate nodes and paths.
 - Configure play modes, scheduling, and FTM frequency
 - Battery levels per node
 - Stealth mode toggle
+- Tab-based navigation
 
 ### FR7 — Stealth Mode
 - Nodes stop advertising the WiFi SoftAP

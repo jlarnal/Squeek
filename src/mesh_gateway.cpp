@@ -77,7 +77,7 @@ void Gateway::onPeerLeft(const uint8_t* mac) {
 }
 
 void Gateway::printStatus() {
-    SqLog.println("--- Gateway Status ---");
-    SqLog.printf("Peers: %u\n", m_peerCount);
+    Serial.println("--- Gateway Status ---");
+    Serial.printf("Peers: %u\n", m_peerCount);
     PeerTable::print();
 }

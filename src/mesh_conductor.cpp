@@ -839,6 +839,13 @@ void MeshConductor::init() {
 }
 
 void MeshConductor::start() {
+    static bool s_meshStarting = false;
+    if (s_started || s_meshStarting) {
+        Serial.println("[mesh] Already started, ignoring duplicate start()");
+        return;
+    }
+    s_meshStarting = true;
+
     mesh_cfg_t cfg = MESH_INIT_CONFIG_DEFAULT();
     cfg.channel = MESH_CHANNEL;
     memcpy((uint8_t*)&cfg.mesh_id, s_meshId, 6);
@@ -936,25 +943,25 @@ IMeshRole* MeshConductor::role() {
 }
 
 void MeshConductor::printStatus() {
-    SqLog.println("=== Mesh Status ===");
-    SqLog.printf("Started: %s\n", s_started ? "yes" : "no");
-    SqLog.printf("Connected: %s\n", s_connected ? "yes" : "no");
-    SqLog.printf("Is Root: %s\n", esp_mesh_is_root() ? "yes" : "no");
-    SqLog.printf("Election done: %s\n", s_electionDone ? "yes" : "no");
-    SqLog.printf("Role: %s\n", s_role ? (s_role->isGateway() ? "GATEWAY" : "NODE") : "none");
-    SqLog.printf("Layer: %d\n", esp_mesh_get_layer());
-    SqLog.printf("Gateway tenure: %u\n", s_gwTenure);
+    Serial.println("=== Mesh Status ===");
+    Serial.printf("Started: %s\n", s_started ? "yes" : "no");
+    Serial.printf("Connected: %s\n", s_connected ? "yes" : "no");
+    Serial.printf("Is Root: %s\n", esp_mesh_is_root() ? "yes" : "no");
+    Serial.printf("Election done: %s\n", s_electionDone ? "yes" : "no");
+    Serial.printf("Role: %s\n", s_role ? (s_role->isGateway() ? "GATEWAY" : "NODE") : "none");
+    Serial.printf("Layer: %d\n", esp_mesh_get_layer());
+    Serial.printf("Gateway tenure: %u\n", s_gwTenure);
 
     int total = esp_mesh_get_total_node_num();
-    SqLog.printf("Total nodes: %d\n", total);
+    Serial.printf("Total nodes: %d\n", total);
 
     mesh_addr_t routing_table[MESH_MAX_NODES];
     int table_size = 0;
     esp_mesh_get_routing_table(routing_table, MESH_MAX_NODES, &table_size);
-    SqLog.printf("Routing table size: %d\n", table_size);
+    Serial.printf("Routing table size: %d\n", table_size);
 
     for (int i = 0; i < table_size; i++) {
-        SqLog.printf("  [%d] %02X:%02X:%02X:%02X:%02X:%02X\n", i,
+        Serial.printf("  [%d] %02X:%02X:%02X:%02X:%02X:%02X\n", i,
             routing_table[i].addr[0], routing_table[i].addr[1],
             routing_table[i].addr[2], routing_table[i].addr[3],
             routing_table[i].addr[4], routing_table[i].addr[5]);

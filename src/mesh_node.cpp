@@ -92,6 +92,6 @@ void MeshNode::onGatewayLost() {
 }
 
 void MeshNode::printStatus() {
-    SqLog.println("--- Node Status ---");
-    SqLog.printf("Gateway alive: %s\n", m_gatewayAlive ? "yes" : "no");
+    Serial.println("--- Node Status ---");
+    Serial.printf("Gateway alive: %s\n", m_gatewayAlive ? "yes" : "no");
 }
