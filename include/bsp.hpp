@@ -87,6 +87,10 @@ constexpr gpio_num_t PIEZO_PIN_B = GPIO_NUM_23;  // push-pull complement
 #define NVS_DEFAULT_ORCH_TONE_INDEX    0
 #define NVS_DEFAULT_CSYNC_INTERVAL_S   10
 
+// Phase 5: Web UI
+#define NVS_DEFAULT_WEB_ENABLED         true
+#define SOFTAP_MAX_CONNECTIONS          4
+
 // Mesh config
 #define MESH_MAX_NODES       16
 #define MESH_CHANNEL         1
