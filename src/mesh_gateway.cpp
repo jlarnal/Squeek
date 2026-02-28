@@ -9,7 +9,11 @@
 #include "sq_log.h"
 #include "orchestrator.h"
 #include "clock_sync.h"
+#include "web_server.h"
+#include "setup_delegate.h"
 #include <Arduino.h>
+#include <esp_wifi.h>
+#include <esp_mac.h>
 
 // Gateway self-heartbeat timer — updates own battery in PeerTable
 static TimerHandle_t s_gwHeartbeatTimer = nullptr;
@@ -39,10 +43,34 @@ void Gateway::begin() {
         xTimerChangePeriod(s_gwHeartbeatTimer, pdMS_TO_TICKS(hbInterval * 1000), 0);
     }
     xTimerStart(s_gwHeartbeatTimer, 0);
+
+    // Phase 5: Web UI
+    if (SqWebServer::hasWifiCreds()) {
+        SqWebServer::start();
+    } else {
+        // No WiFi creds — enter Setup Delegate mode
+        // Lone gateway (0 peers) handles it itself
+        if (m_peerCount == 0) {
+            uint8_t ownMac[6];
+            esp_read_mac(ownMac, ESP_MAC_WIFI_STA);
+            SqLog.println("[gateway] No WiFi creds, self-delegating for setup");
+            SetupDelegate::begin(ownMac);
+        } else {
+            // TODO: designate a peer as Setup Delegate (send MSG_TYPE_SETUP_DELEGATE)
+            // For now, self-delegate even with peers
+            uint8_t ownMac[6];
+            esp_read_mac(ownMac, ESP_MAC_WIFI_STA);
+            SqLog.println("[gateway] No WiFi creds, self-delegating for setup (has peers)");
+            SetupDelegate::begin(ownMac);
+        }
+    }
 }
 
 void Gateway::end() {
     SqLog.println("[gateway] Gateway role stopping");
+
+    // Phase 5: Web UI — stop before mesh teardown
+    SqWebServer::stop();
 
     if (s_gwHeartbeatTimer) {
         xTimerStop(s_gwHeartbeatTimer, 0);

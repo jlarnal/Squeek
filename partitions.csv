@@ -1,6 +1,6 @@
-# Squeek – ESP32-C6FH4 4MB flash, single factory app, max NVS
-# Factory at 0x10000 (PlatformIO default), NVS at end of flash.
+# Squeek – ESP32-C6FH4 4MB flash
 # Name,      Type, SubType, Offset,   Size
 phy_init,    data, phy,     0x9000,   0x1000
-factory,     app,  factory, 0x10000,  0x3D0000
-nvs,         data, nvs,     0x3E0000, 0x20000
+factory,     app,  factory, 0x10000,  0x2F0000
+storage,     data, littlefs,0x300000, 0xC0000
+nvs,         data, nvs,     0x3C0000, 0x20000

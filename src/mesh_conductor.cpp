@@ -10,6 +10,7 @@
 #include "sq_log.h"
 #include "orchestrator.h"
 #include "clock_sync.h"
+#include "web_server.h"
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <string.h>
@@ -20,6 +21,7 @@
 #include <esp_mac.h>
 #include <nvs_flash.h>
 #include <nvs.h>
+#include <driver/gpio.h>
 
 static const char* TAG = "mesh";
 
@@ -49,6 +51,37 @@ static TaskHandle_t  s_electTaskHandle = nullptr;
 static ElectionScore s_scores[MESH_MAX_NODES];
 static uint8_t     s_scoreCount     = 0;
 static uint16_t    s_gwTenure       = 0;        // cached from NVS
+
+// BOOT button — force gateway promotion
+static void promoteTimerCb(TimerHandle_t t);  // forward decl
+
+static volatile uint32_t s_bootBtnLastEdge = 0;
+static volatile uint8_t  s_bootBtnEdges    = 0;
+
+static void IRAM_ATTR bootButtonISR(void* arg) {
+    (void)arg;
+    uint32_t now = xTaskGetTickCountFromISR();
+    uint32_t elapsed = (now - s_bootBtnLastEdge) * portTICK_PERIOD_MS;
+    if (elapsed < BOOT_BUTTON_DEBOUNCE_MS) return;  // debounce
+
+    uint8_t edges = s_bootBtnEdges + 1;
+    s_bootBtnEdges = edges;
+    s_bootBtnLastEdge = now;
+
+    if (edges >= 2) {
+        // Two edges = one press-release cycle — force promote
+        s_bootBtnEdges = 0;
+        // Defer to timer service context (can't call mesh APIs from ISR)
+        BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+        xTimerPendFunctionCallFromISR(
+            [](void* p1, uint32_t p2) {
+                (void)p1; (void)p2;
+                promoteTimerCb(nullptr);
+            },
+            nullptr, 0, &xHigherPriorityTaskWoken);
+        portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+    }
+}
 
 // Config response wait mechanism
 static SemaphoreHandle_t s_configRespSema = nullptr;
@@ -578,6 +611,40 @@ static void meshRxTask(void* pvParameters) {
                 ClockSyncMsg* cs = (ClockSyncMsg*)rx_buf;
                 ClockSync::onSyncReceived(cs->gateway_ms);
             }
+            // Phase 5: Setup Delegate messages
+            else if (msgType == MSG_TYPE_WIFI_CREDS && data.size >= sizeof(WifiCredsMsg)) {
+                WifiCredsMsg* wc = (WifiCredsMsg*)rx_buf;
+                wc->ssid[32] = '\0';      // safety null-terminate
+                wc->password[64] = '\0';
+                SqWebServer::saveWifiCreds(wc->ssid, wc->password);
+                SqLog.printf("[mesh] Received WiFi credentials (SSID=%s)\n", wc->ssid);
+                // Send ACK back
+                WifiCredsAckMsg ack = { .type = MSG_TYPE_WIFI_CREDS_ACK };
+                MeshConductor::sendToRoot(&ack, sizeof(ack));
+            }
+            else if (msgType == MSG_TYPE_WIFI_CREDS_ACK) {
+                SqLog.println("[mesh] WiFi credentials ACK received");
+                // TODO: mark peer as creds-received (stop retrying)
+            }
+            else if (msgType == MSG_TYPE_MERGE_CHECK && data.size >= sizeof(MergeCheckMsg)) {
+                MergeCheckMsg* mc = (MergeCheckMsg*)rx_buf;
+                if (esp_mesh_is_root()) {
+                    mesh_addr_t rt[MESH_MAX_NODES];
+                    int rtSize = 0;
+                    esp_mesh_get_routing_table(rt, sizeof(rt), &rtSize);
+                    if (rtSize < mc->root_table_size) {
+                        SqLog.printf("[mesh] Merge check: yielding root (my %d < sender %d)\n",
+                                     rtSize, mc->root_table_size);
+                        esp_mesh_set_self_organized(true, true);  // rescan
+                    }
+                }
+            }
+            else if (msgType == MSG_TYPE_SETUP_DELEGATE && data.size >= sizeof(SetupDelegateMsg)) {
+                SetupDelegateMsg* sd = (SetupDelegateMsg*)rx_buf;
+                SqLog.println("[mesh] Designated as Setup Delegate");
+                // TODO: trigger SetupDelegate::begin(sd->gateway_mac) in Task 8
+                (void)sd;
+            }
         }
 
         // Reset buffer for next receive
@@ -754,21 +821,18 @@ static void meshEventHandler(void* arg, esp_event_base_t event_base,
 
     case MESH_EVENT_NO_PARENT_FOUND:
         s_parentRetries++;
-        SqLog.printf("[mesh] No parent found (attempt %u)\n", s_parentRetries);
         if (!esp_mesh_is_root()) {
-            uint8_t mac[6];
-            esp_read_mac(mac, ESP_MAC_WIFI_STA);
-            uint16_t jitter = ((mac[4] << 8) | mac[5]) % 2000;
-            SqLog.printf("[mesh] Scheduling root promotion in %u ms\n", jitter);
+            // Only schedule the promote timer once — don't reset it on every scan failure
             if (s_promoteTimer == nullptr) {
+                uint8_t mac[6];
+                esp_read_mac(mac, ESP_MAC_WIFI_STA);
+                uint32_t jitter = MESH_PROMOTE_BASE_MS + (((mac[4] << 8) | mac[5]) % MESH_PROMOTE_JITTER_MS);
+                SqLog.printf("[mesh] Scheduling root promotion in %u ms\n", jitter);
                 s_promoteTimer = xTimerCreate("promote",
-                    pdMS_TO_TICKS(jitter > 0 ? jitter : 1),
+                    pdMS_TO_TICKS(jitter),
                     pdFALSE, nullptr, promoteTimerCb);
-            } else {
-                xTimerChangePeriod(s_promoteTimer,
-                    pdMS_TO_TICKS(jitter > 0 ? jitter : 1), 0);
+                xTimerStart(s_promoteTimer, 0);
             }
-            xTimerStart(s_promoteTimer, 0);
         } else {
             if (s_parentRetries >= MESH_MAX_RETRIES) {
                 SqLog.println("[mesh] Root with no children — rebooting");
@@ -836,6 +900,17 @@ void MeshConductor::init() {
 
     ESP_ERROR_CHECK(esp_event_handler_register(MESH_EVENT, ESP_EVENT_ANY_ID,
                                                 &meshEventHandler, NULL));
+
+    // BOOT button (GPIO0) — press to force gateway self-promotion
+    gpio_config_t btn_cfg = {};
+    btn_cfg.pin_bit_mask = (1ULL << BOOT_BUTTON_PIN);
+    btn_cfg.mode = GPIO_MODE_INPUT;
+    btn_cfg.pull_up_en = GPIO_PULLUP_ENABLE;
+    btn_cfg.intr_type = GPIO_INTR_ANYEDGE;
+    gpio_config(&btn_cfg);
+    gpio_install_isr_service(0);
+    gpio_isr_handler_add(BOOT_BUTTON_PIN, bootButtonISR, nullptr);
+    SqLog.println("[mesh] BOOT button (GPIO0) — press to force promotion");
 }
 
 void MeshConductor::start() {
@@ -850,10 +925,17 @@ void MeshConductor::start() {
     cfg.channel = MESH_CHANNEL;
     memcpy((uint8_t*)&cfg.mesh_id, s_meshId, 6);
 
-    // Routerless mesh — fix_root(true) disables router-RSSI election,
-    // so router config can be zeroed.  If esp_mesh_set_config() still
-    // rejects an empty SSID even with fix_root, fall back to a placeholder.
+    // Router config: populate with real creds if available, else placeholder
     memset(&cfg.router, 0, sizeof(cfg.router));
+    {
+        char ssid[33] = {}, pass[65] = {};
+        if (SqWebServer::loadWifiCreds(ssid, sizeof(ssid), pass, sizeof(pass))) {
+            memcpy(cfg.router.ssid, ssid, strlen(ssid));
+            cfg.router.ssid_len = strlen(ssid);
+            memcpy(cfg.router.password, pass, strlen(pass));
+            SqLog.printf("[mesh] Router config set: SSID=%s\n", ssid);
+        }
+    }
 
     // Mesh AP settings (no password for Phase 1)
     cfg.mesh_ap.max_connection = 6;
@@ -864,10 +946,11 @@ void MeshConductor::start() {
 
     esp_err_t err = esp_mesh_set_config(&cfg);
     if (err == ESP_ERR_MESH_ARGUMENT) {
-        // fix_root didn't relax the SSID check — use placeholder
+        // SSID check failed — use placeholder (routerless mesh)
         const char* ph = "SQUEEK_MESH";
         memcpy(cfg.router.ssid, ph, strlen(ph));
         cfg.router.ssid_len = strlen(ph);
+        memset(cfg.router.password, 0, sizeof(cfg.router.password));
         ESP_ERROR_CHECK(esp_mesh_set_config(&cfg));
     }
 

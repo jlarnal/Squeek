@@ -87,6 +87,10 @@ constexpr gpio_num_t PIEZO_PIN_B = GPIO_NUM_23;  // push-pull complement
 #define NVS_DEFAULT_ORCH_TONE_INDEX    0
 #define NVS_DEFAULT_CSYNC_INTERVAL_S   10
 
+// Phase 5: Web UI
+#define NVS_DEFAULT_WEB_ENABLED         true
+#define SOFTAP_MAX_CONNECTIONS          4
+
 // Mesh config
 #define MESH_MAX_NODES       16
 #define MESH_CHANNEL         1
@@ -103,5 +107,13 @@ constexpr gpio_num_t PIEZO_PIN_B = GPIO_NUM_23;  // push-pull complement
 #define MESH_RETRY_DELAY_MS  2000
 #define MESH_MAX_RETRIES     10
 #define MESH_REELECT_SLEEP_MS 5000   // sleep before reboot on gateway loss
+
+// Self-promotion delay (prevents split meshes when Setup Delegate is away)
+#define MESH_PROMOTE_BASE_MS   10000   // minimum wait before self-promoting to root
+#define MESH_PROMOTE_JITTER_MS 10000   // MAC-based jitter added on top (total: 10-20s)
+
+// BOOT button — GPIO0 on all ESP32 boards, press to force gateway promotion
+#define BOOT_BUTTON_PIN        GPIO_NUM_0
+#define BOOT_BUTTON_DEBOUNCE_MS 50
 
 #endif //HPP_BSP_HPP

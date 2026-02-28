@@ -41,6 +41,9 @@ PropertyValue<NVS_KEY_FTM_SWP,   uint32_t, NvsConfigManager> NvsConfigManager::f
 PropertyValue<NVS_KEY_FTM_KPN,   float,    NvsConfigManager> NvsConfigManager::ftmKalmanProcessNoise(DEFAULT_FTM_KALMAN_PN);
 PropertyValue<NVS_KEY_FTM_OFS,   uint32_t, NvsConfigManager> NvsConfigManager::ftmResponderOffset_cm(DEFAULT_FTM_RESP_OFS_CM);
 
+// Phase 5: Web UI
+PropertyValue<NVS_KEY_WEB_EN, bool, NvsConfigManager> NvsConfigManager::webEnabled(DEFAULT_WEB_ENABLED);
+
 // Phase 4: Orchestrator
 PropertyValue<NVS_KEY_ORCH_MODE, uint32_t, NvsConfigManager> NvsConfigManager::orchMode(DEFAULT_ORCH_MODE);
 PropertyValue<NVS_KEY_ORCH_TRVD, uint32_t, NvsConfigManager> NvsConfigManager::orchTravelDelay_ms(DEFAULT_ORCH_TRAVEL_DELAY);
@@ -178,6 +181,9 @@ void NvsConfigManager::reloadFromNvs()
     orchToneIndex.loadInitial(nvsGetU32(NVS_KEY_ORCH_TONE, DEFAULT_ORCH_TONE_INDEX));
     clockSyncInterval_s.loadInitial(nvsGetU32(NVS_KEY_CSYNC_INT, DEFAULT_CSYNC_INTERVAL_S));
 
+    // Phase 5
+    webEnabled.loadInitial(nvsGetBool(NVS_KEY_WEB_EN, DEFAULT_WEB_ENABLED));
+
     ESP_LOGI(TAG, "Config loaded from NVS");
 }
 
@@ -221,6 +227,9 @@ bool NvsConfigManager::restoreFactoryDefault(uint32_t safeKey)
     orchRandomMax_ms      = (uint32_t)DEFAULT_ORCH_RANDOM_MAX;
     orchToneIndex         = (uint32_t)DEFAULT_ORCH_TONE_INDEX;
     clockSyncInterval_s   = (uint32_t)DEFAULT_CSYNC_INTERVAL_S;
+
+    // Phase 5
+    webEnabled            = DEFAULT_WEB_ENABLED;
 
     return true;
 }
