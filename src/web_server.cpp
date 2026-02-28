@@ -1,5 +1,6 @@
 #include "web_server.h"
 #include "storage_manager.h"
+#include "property_value.h"
 
 #include <ESPAsyncWebServer.h>
 #include <AsyncWebSocket.h>
@@ -10,15 +11,63 @@
 #include <lwip/sockets.h>
 #include <esp_netif.h>
 #include <esp_mesh.h>
+#include <nvs_flash.h>
+#include <mdns.h>
+#include <esp_sntp.h>
+#include <time.h>
 
 static const char* TAG = "webserver";
+
+// ---------------------------------------------------------------------------
+// WiFi credential NVS helpers (raw string API — PropertyValue only does scalars)
+// ---------------------------------------------------------------------------
+static constexpr char NVS_KEY_WIFI_SSID[] = "wifiSsid";
+static constexpr char NVS_KEY_WIFI_PASS[] = "wifiPass";
+
+bool SqWebServer::loadWifiCreds(char* ssid, size_t ssidLen, char* pass, size_t passLen) {
+    if (!NvsConfig::isOpen) return false;
+    size_t sLen = ssidLen;
+    esp_err_t err = nvs_get_str(NvsConfig::handle, NVS_KEY_WIFI_SSID, ssid, &sLen);
+    if (err != ESP_OK || sLen <= 1) return false;   // empty or missing
+    size_t pLen = passLen;
+    err = nvs_get_str(NvsConfig::handle, NVS_KEY_WIFI_PASS, pass, &pLen);
+    if (err != ESP_OK) { pass[0] = '\0'; }           // open network OK
+    return true;
+}
+
+bool SqWebServer::saveWifiCreds(const char* ssid, const char* pass) {
+    if (!NvsConfig::isOpen) return false;
+    esp_err_t err = nvs_set_str(NvsConfig::handle, NVS_KEY_WIFI_SSID, ssid);
+    if (err != ESP_OK) { ESP_LOGE(TAG, "nvs_set_str(wifiSsid) failed: %s", esp_err_to_name(err)); return false; }
+    err = nvs_set_str(NvsConfig::handle, NVS_KEY_WIFI_PASS, pass ? pass : "");
+    if (err != ESP_OK) { ESP_LOGE(TAG, "nvs_set_str(wifiPass) failed: %s", esp_err_to_name(err)); return false; }
+    nvs_commit(NvsConfig::handle);
+    ESP_LOGI(TAG, "WiFi credentials saved to NVS (SSID=%s)", ssid);
+    return true;
+}
+
+bool SqWebServer::clearWifiCreds() {
+    if (!NvsConfig::isOpen) return false;
+    nvs_erase_key(NvsConfig::handle, NVS_KEY_WIFI_SSID);
+    nvs_erase_key(NvsConfig::handle, NVS_KEY_WIFI_PASS);
+    nvs_commit(NvsConfig::handle);
+    ESP_LOGI(TAG, "WiFi credentials cleared from NVS");
+    return true;
+}
+
+bool SqWebServer::hasWifiCreds() {
+    char ssid[33];
+    char pass[65];
+    return loadWifiCreds(ssid, sizeof(ssid), pass, sizeof(pass));
+}
 
 // ---- file-scope state -----------------------------------------------------
 static AsyncWebServer* s_server  = nullptr;
 static AsyncWebSocket*  s_ws     = nullptr;
-static bool             s_running = false;
-static TaskHandle_t     s_dnsTask = nullptr;
-static volatile bool    s_dnsStop = false;
+static bool             s_running  = false;
+static bool             s_staMode  = false;
+static TaskHandle_t     s_dnsTask  = nullptr;
+static volatile bool    s_dnsStop  = false;
 
 // ---------------------------------------------------------------------------
 // Get the AP interface IP — works with ESP-mesh (WiFi.softAPIP() returns
@@ -243,6 +292,25 @@ void SqWebServer::start() {
 
     s_running = true;
 
+    // If mesh root has a router connection, start mDNS + NTP
+    esp_netif_ip_info_t sta_info = {};
+    esp_netif_t* sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (sta && esp_netif_get_ip_info(sta, &sta_info) == ESP_OK && sta_info.ip.addr != 0) {
+        // mDNS
+        if (mdns_init() == ESP_OK) {
+            mdns_hostname_set("squeek");
+            mdns_instance_name_set("Squeek Mesh Controller");
+            mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
+            ESP_LOGI(TAG, "mDNS started: squeek.local");
+        }
+        // NTP
+        esp_sntp_setoperatingmode(ESP_SNTP_OPMODE_POLL);
+        esp_sntp_setservername(0, "pool.ntp.org");
+        esp_sntp_init();
+        ESP_LOGI(TAG, "NTP sync started");
+        s_staMode = true;
+    }
+
     uint32_t addr = getApIpAddr();
     ESP_LOGI(TAG, "Web server started — http://%u.%u.%u.%u/",
              (addr >> 0) & 0xFF, (addr >> 8) & 0xFF,
@@ -251,6 +319,14 @@ void SqWebServer::start() {
 
 void SqWebServer::stop() {
     if (!s_running) return;
+
+    if (s_staMode) {
+        mdns_service_remove_all();
+        mdns_free();
+        esp_sntp_stop();
+        s_staMode = false;
+        ESP_LOGI(TAG, "mDNS + NTP stopped");
+    }
 
     stopDNS();
 

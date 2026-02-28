@@ -33,6 +33,7 @@ static const ConfigField s_fields[] = {
     { NVS_KEY_ORCH_RMAX, "Orch random max (ms)",         CFG_U32   },
     { NVS_KEY_ORCH_TONE, "Orch tone index",              CFG_U32   },
     { NVS_KEY_CSYNC_INT, "Clock sync interval (s)",      CFG_U32   },
+    { NVS_KEY_WEB_EN,   "Web UI enabled",              CFG_BOOL  },
 };
 static constexpr uint8_t FIELD_COUNT = sizeof(s_fields) / sizeof(s_fields[0]);
 
@@ -67,6 +68,7 @@ static void getField(JsonDocument& doc, const ConfigField& f) {
     if (strcmp(f.key, NVS_KEY_ORCH_RMAX) == 0) { doc[f.key] = (uint32_t)NvsConfigManager::orchRandomMax_ms; return; }
     if (strcmp(f.key, NVS_KEY_ORCH_TONE) == 0) { doc[f.key] = (uint32_t)NvsConfigManager::orchToneIndex; return; }
     if (strcmp(f.key, NVS_KEY_CSYNC_INT) == 0) { doc[f.key] = (uint32_t)NvsConfigManager::clockSyncInterval_s; return; }
+    if (strcmp(f.key, NVS_KEY_WEB_EN) == 0)   { doc[f.key] = (bool)NvsConfigManager::webEnabled; return; }
 }
 
 // --- Setter helper: apply a JSON value to the matching PropertyValue ---
@@ -111,6 +113,7 @@ static bool setField(const char* key, JsonVariantConst val) {
     if (strcmp(key, NVS_KEY_ORCH_RMAX) == 0) { NvsConfigManager::orchRandomMax_ms = val.as<uint32_t>(); return true; }
     if (strcmp(key, NVS_KEY_ORCH_TONE) == 0) { NvsConfigManager::orchToneIndex = val.as<uint32_t>(); return true; }
     if (strcmp(key, NVS_KEY_CSYNC_INT) == 0) { NvsConfigManager::clockSyncInterval_s = val.as<uint32_t>(); return true; }
+    if (strcmp(key, NVS_KEY_WEB_EN) == 0)   { NvsConfigManager::webEnabled = val.as<bool>(); return true; }
     return false;
 }
 

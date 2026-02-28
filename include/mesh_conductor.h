@@ -24,6 +24,11 @@ enum MeshMsgType : uint8_t {
     MSG_TYPE_PLAY_CMD    = 0x70,   // gateway → node: play tone
     MSG_TYPE_ORCH_MODE   = 0x71,   // gateway → all: mode changed
     MSG_TYPE_CLOCK_SYNC  = 0x72,   // gateway → all: time sync
+    // Phase 5: Setup Delegate
+    MSG_TYPE_WIFI_CREDS      = 0x80,  // delegate → gateway, gateway → peers
+    MSG_TYPE_WIFI_CREDS_ACK  = 0x81,  // receiver → sender
+    MSG_TYPE_MERGE_CHECK     = 0x82,  // delegate → broadcast: split-mesh healing
+    MSG_TYPE_SETUP_DELEGATE  = 0x83,  // gateway → peer: designate as delegate
 };
 
 // --- Election score broadcast packet ---
@@ -138,6 +143,28 @@ struct __attribute__((packed)) OrchModeMsg {
 struct __attribute__((packed)) ClockSyncMsg {
     uint8_t  type;           // MSG_TYPE_CLOCK_SYNC
     uint32_t gateway_ms;     // gateway's millis()
+};
+
+// --- Phase 5: Setup Delegate messages ---
+
+struct __attribute__((packed)) WifiCredsMsg {
+    uint8_t type;           // MSG_TYPE_WIFI_CREDS
+    char    ssid[33];       // null-terminated, max 32 chars
+    char    password[65];   // null-terminated, max 64 chars
+};
+
+struct __attribute__((packed)) WifiCredsAckMsg {
+    uint8_t type;           // MSG_TYPE_WIFI_CREDS_ACK
+};
+
+struct __attribute__((packed)) MergeCheckMsg {
+    uint8_t type;            // MSG_TYPE_MERGE_CHECK
+    uint8_t root_table_size; // routing table size of the sender
+};
+
+struct __attribute__((packed)) SetupDelegateMsg {
+    uint8_t type;            // MSG_TYPE_SETUP_DELEGATE
+    uint8_t gateway_mac[6];  // gateway MAC — last 2 bytes used for SSID discriminator
 };
 
 // --- IMeshRole abstract interface ---

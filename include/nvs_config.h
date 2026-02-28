@@ -41,6 +41,9 @@ inline constexpr char NVS_KEY_FTM_SWP[]   = "ftmSwp";
 inline constexpr char NVS_KEY_FTM_KPN[]   = "ftmKpn";
 inline constexpr char NVS_KEY_FTM_OFS[]   = "ftmOfs";
 
+// Phase 5: Web UI
+inline constexpr char NVS_KEY_WEB_EN[]    = "webEn";
+
 // --- Default values (sourced from BSP defines for single-point maintenance) ---
 
 inline constexpr bool     DEFAULT_LEDS_ENABLED       = NVS_DEFAULT_LEDS_ENABLED;
@@ -68,6 +71,9 @@ inline constexpr uint32_t DEFAULT_ORCH_RANDOM_MIN     = NVS_DEFAULT_ORCH_RANDOM_
 inline constexpr uint32_t DEFAULT_ORCH_RANDOM_MAX     = NVS_DEFAULT_ORCH_RANDOM_MAX;
 inline constexpr uint32_t DEFAULT_ORCH_TONE_INDEX     = NVS_DEFAULT_ORCH_TONE_INDEX;
 inline constexpr uint32_t DEFAULT_CSYNC_INTERVAL_S    = NVS_DEFAULT_CSYNC_INTERVAL_S;
+
+// Phase 5: Web UI defaults
+inline constexpr bool     DEFAULT_WEB_ENABLED         = NVS_DEFAULT_WEB_ENABLED;
 
 // Phase 2: FTM defaults
 inline constexpr uint32_t DEFAULT_FTM_STALE_S        = NVS_DEFAULT_FTM_STALE_S;
@@ -144,6 +150,8 @@ namespace nvs_detail {
         h = fnvU32(h, DEFAULT_ORCH_RANDOM_MAX);
         h = fnvU32(h, DEFAULT_ORCH_TONE_INDEX);
         h = fnvU32(h, DEFAULT_CSYNC_INTERVAL_S);
+        // Phase 5
+        h = fnvBool(h, DEFAULT_WEB_ENABLED);
         return h;
     }
 }
@@ -207,6 +215,9 @@ public:
     static PropertyValue<NVS_KEY_ORCH_RMAX, uint32_t, NvsConfigManager> orchRandomMax_ms;
     static PropertyValue<NVS_KEY_ORCH_TONE, uint32_t, NvsConfigManager> orchToneIndex;
     static PropertyValue<NVS_KEY_CSYNC_INT, uint32_t, NvsConfigManager> clockSyncInterval_s;
+
+    // Phase 5: Web UI
+    static PropertyValue<NVS_KEY_WEB_EN, bool, NvsConfigManager> webEnabled;
 };
 
 #endif // NVS_CONFIG_H

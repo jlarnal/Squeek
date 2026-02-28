@@ -16,6 +16,8 @@
 #include "tone_library.h"
 #include "orchestrator.h"
 #include "clock_sync.h"
+#include "web_server.h"
+#include "setup_delegate.h"
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <esp_system.h>
@@ -56,7 +58,7 @@ static const CliCommand s_commands[] = {
     { "help",      cmd_help,      "List all commands" },
     { "led",       cmd_led,       "Blink status LED + RGB R/G/B test" },
     { "battery",   cmd_battery,   "Read battery voltage and status" },
-    { "wifi",      cmd_wifi,      "Scan nearby APs" },
+    { "wifi",      cmd_wifi,      "WiFi: scan|set|clear|status|delegate" },
     { "mesh",      cmd_mesh,      "Join mesh, show peers, then stop" },
     { "elect",     cmd_elect,     "Force gateway re-election" },
     { "rtc",       cmd_rtc,       "RTC memory write/readback test" },
@@ -122,24 +124,80 @@ static void cmd_battery(const char* args) {
 }
 
 static void cmd_wifi(const char* args) {
-    (void)args;
-    Serial.println("Scanning WiFi...");
-    WiFi.mode(WIFI_STA);
-    WiFi.disconnect();
-    delay(100);
+    // Parse subcommand
+    char sub[16] = {};
+    char arg1[64] = {};
+    char arg2[64] = {};
+    if (args && *args) {
+        sscanf(args, "%15s %63s %63s", sub, arg1, arg2);
+    }
 
-    int n = WiFi.scanNetworks();
-    if (n == 0) {
-        Serial.println("No networks found.");
-    } else {
-        Serial.printf("Found %d networks:\n", n);
-        for (int i = 0; i < n; i++) {
-            Serial.printf("  [%d] %-32s  RSSI:%d  CH:%d\n",
-                i + 1, WiFi.SSID(i).c_str(), WiFi.RSSI(i), WiFi.channel(i));
+    if (strcmp(sub, "scan") == 0 || sub[0] == '\0') {
+        // Default: scan nearby APs (don't change WiFi mode if mesh is running)
+        Serial.println("Scanning WiFi (async)...");
+        int n = WiFi.scanNetworks(false, false, false, 300);
+        if (n == WIFI_SCAN_RUNNING) {
+            Serial.println("Scan already running.");
+        } else if (n == 0) {
+            Serial.println("No networks found.");
+        } else if (n < 0) {
+            Serial.println("Scan failed.");
+        } else {
+            Serial.printf("Found %d networks:\n", n);
+            for (int i = 0; i < n; i++) {
+                Serial.printf("  [%d] %-32s  RSSI:%d  CH:%d\n",
+                    i + 1, WiFi.SSID(i).c_str(), WiFi.RSSI(i), WiFi.channel(i));
+            }
+        }
+        WiFi.scanDelete();
+    }
+    else if (strcmp(sub, "set") == 0) {
+        if (arg1[0] == '\0') {
+            Serial.println("Usage: wifi set <ssid> [password]");
+            return;
+        }
+        if (SqWebServer::saveWifiCreds(arg1, arg2[0] ? arg2 : "")) {
+            Serial.printf("WiFi credentials saved: SSID=%s\n", arg1);
+            Serial.println("Reboot to apply (run: reboot)");
+        } else {
+            Serial.println("Failed to save WiFi credentials");
         }
     }
-    WiFi.scanDelete();
-    WiFi.mode(WIFI_OFF);
+    else if (strcmp(sub, "clear") == 0) {
+        if (SqWebServer::clearWifiCreds()) {
+            Serial.println("WiFi credentials cleared");
+            Serial.println("Reboot to apply (run: reboot)");
+        } else {
+            Serial.println("Failed to clear WiFi credentials");
+        }
+    }
+    else if (strcmp(sub, "status") == 0) {
+        char ssid[33], pass[65];
+        bool hasCreds = SqWebServer::loadWifiCreds(ssid, sizeof(ssid), pass, sizeof(pass));
+        Serial.printf("Stored SSID: %s\n", hasCreds ? ssid : "(none)");
+        Serial.printf("Web server: %s\n", SqWebServer::isRunning() ? "running" : "stopped");
+        Serial.printf("Setup Delegate: %s\n", SetupDelegate::isActive() ? "ACTIVE" : "inactive");
+        Serial.printf("WiFi mode: %d\n", WiFi.getMode());
+        if (WiFi.isConnected()) {
+            Serial.printf("STA connected: %s  IP=%s  RSSI=%d\n",
+                          WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(), WiFi.RSSI());
+        }
+        Serial.printf("SoftAP IP: %s  clients=%d\n",
+                      WiFi.softAPIP().toString().c_str(), WiFi.softAPgetStationNum());
+    }
+    else if (strcmp(sub, "delegate") == 0) {
+        if (SetupDelegate::isActive()) {
+            Serial.println("Setup Delegate already active");
+        } else {
+            uint8_t mac[6];
+            esp_read_mac(mac, ESP_MAC_WIFI_STA);
+            Serial.println("Starting Setup Delegate mode...");
+            SetupDelegate::begin(mac);
+        }
+    }
+    else {
+        Serial.println("wifi subcommands: scan, set <ssid> [pass], clear, status, delegate");
+    }
 }
 
 static void cmd_mesh(const char* args) {

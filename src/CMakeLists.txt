@@ -22,6 +22,7 @@ idf_component_register(SRCS
     "orchestrator.cpp"
     "clock_sync.cpp"
     "web_server.cpp"
+    "setup_delegate.cpp"
     "stealth_manager.cpp"
     "ota_manager.cpp"
 )

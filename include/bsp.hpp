@@ -108,4 +108,12 @@ constexpr gpio_num_t PIEZO_PIN_B = GPIO_NUM_23;  // push-pull complement
 #define MESH_MAX_RETRIES     10
 #define MESH_REELECT_SLEEP_MS 5000   // sleep before reboot on gateway loss
 
+// Self-promotion delay (prevents split meshes when Setup Delegate is away)
+#define MESH_PROMOTE_BASE_MS   10000   // minimum wait before self-promoting to root
+#define MESH_PROMOTE_JITTER_MS 10000   // MAC-based jitter added on top (total: 10-20s)
+
+// BOOT button — GPIO0 on all ESP32 boards, press to force gateway promotion
+#define BOOT_BUTTON_PIN        GPIO_NUM_0
+#define BOOT_BUTTON_DEBOUNCE_MS 50
+
 #endif //HPP_BSP_HPP
