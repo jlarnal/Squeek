@@ -8,6 +8,8 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <lwip/sockets.h>
+#include <esp_netif.h>
+#include <esp_mesh.h>
 
 static const char* TAG = "webserver";
 
@@ -17,6 +19,26 @@ static AsyncWebSocket*  s_ws     = nullptr;
 static bool             s_running = false;
 static TaskHandle_t     s_dnsTask = nullptr;
 static volatile bool    s_dnsStop = false;
+
+// ---------------------------------------------------------------------------
+// Get the AP interface IP — works with ESP-mesh (WiFi.softAPIP() returns
+// 0.0.0.0 when the mesh manages the AP netif).
+// ---------------------------------------------------------------------------
+static uint32_t getApIpAddr() {
+    esp_netif_ip_info_t ip_info = {};
+    esp_netif_t* ap_netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+    if (ap_netif && esp_netif_get_ip_info(ap_netif, &ip_info) == ESP_OK
+        && ip_info.ip.addr != 0) {
+        return ip_info.ip.addr;
+    }
+    // Fallback: try the mesh SoftAP netif
+    ap_netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (ap_netif && esp_netif_get_ip_info(ap_netif, &ip_info) == ESP_OK
+        && ip_info.ip.addr != 0) {
+        return ip_info.ip.addr;
+    }
+    return 0;
+}
 
 // Fixed BSSID for the mesh AP — defined here but NOT applied yet.
 // Must be applied before esp_mesh_start() (Phase 5 wiring task).
@@ -62,10 +84,13 @@ static void dnsTask(void* /*param*/) {
         if (n < 12) continue;  // too short or timeout
 
         // Get the AP IP to redirect to
-        IPAddress apIP = WiFi.softAPIP();
+        uint32_t addr = getApIpAddr();
+        if (addr == 0) continue;  // no IP yet, skip
         uint8_t ip[4];
-        ip[0] = apIP[0]; ip[1] = apIP[1];
-        ip[2] = apIP[2]; ip[3] = apIP[3];
+        ip[0] = (addr >>  0) & 0xFF;
+        ip[1] = (addr >>  8) & 0xFF;
+        ip[2] = (addr >> 16) & 0xFF;
+        ip[3] = (addr >> 24) & 0xFF;
 
         // Build minimal DNS response in-place
         // Header: set QR=1 (response), AA=1, RCODE=0
@@ -218,8 +243,10 @@ void SqWebServer::start() {
 
     s_running = true;
 
-    IPAddress apIP = WiFi.softAPIP();
-    ESP_LOGI(TAG, "Web server started — http://%s/", apIP.toString().c_str());
+    uint32_t addr = getApIpAddr();
+    ESP_LOGI(TAG, "Web server started — http://%u.%u.%u.%u/",
+             (addr >> 0) & 0xFF, (addr >> 8) & 0xFF,
+             (addr >> 16) & 0xFF, (addr >> 24) & 0xFF);
 }
 
 void SqWebServer::stop() {
