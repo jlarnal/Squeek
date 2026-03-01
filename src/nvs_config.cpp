@@ -44,6 +44,10 @@ PropertyValue<NVS_KEY_FTM_OFS,   uint32_t, NvsConfigManager> NvsConfigManager::f
 // Phase 5: Web UI
 PropertyValue<NVS_KEY_WEB_EN, bool, NvsConfigManager> NvsConfigManager::webEnabled(DEFAULT_WEB_ENABLED);
 
+// Fast-path boot
+PropertyValue<NVS_KEY_FAST_SCAN, uint16_t, NvsConfigManager>
+    NvsConfigManager::fastScanDelay_s{DEFAULT_FAST_SCAN};
+
 // Phase 4: Orchestrator
 PropertyValue<NVS_KEY_ORCH_MODE, uint32_t, NvsConfigManager> NvsConfigManager::orchMode(DEFAULT_ORCH_MODE);
 PropertyValue<NVS_KEY_ORCH_TRVD, uint32_t, NvsConfigManager> NvsConfigManager::orchTravelDelay_ms(DEFAULT_ORCH_TRAVEL_DELAY);
@@ -184,6 +188,9 @@ void NvsConfigManager::reloadFromNvs()
     // Phase 5
     webEnabled.loadInitial(nvsGetBool(NVS_KEY_WEB_EN, DEFAULT_WEB_ENABLED));
 
+    // Fast-path boot
+    fastScanDelay_s.loadInitial(nvsGetU16(NVS_KEY_FAST_SCAN, DEFAULT_FAST_SCAN));
+
     ESP_LOGI(TAG, "Config loaded from NVS");
 }
 
@@ -230,6 +237,9 @@ bool NvsConfigManager::restoreFactoryDefault(uint32_t safeKey)
 
     // Phase 5
     webEnabled            = DEFAULT_WEB_ENABLED;
+
+    // Fast-path boot
+    fastScanDelay_s       = DEFAULT_FAST_SCAN;
 
     return true;
 }

@@ -4,6 +4,7 @@
 #include "storage_manager.h"
 #include "bsp.hpp"
 #include "sq_log.h"
+#include "rtc_state.h"
 
 #include <ESPAsyncWebServer.h>
 #include <WiFi.h>
@@ -261,6 +262,8 @@ void SetupDelegate::begin(const uint8_t gatewayMac[6]) {
     SqWebServer::startDNS();
 
     s_active = true;
+    RtcState::get()->delegate_active = 1;
+    RtcState::save();
     ESP_LOGI(TAG, "Setup Delegate active — waiting for WiFi credentials");
 }
 
@@ -288,6 +291,8 @@ void SetupDelegate::end() {
     xTaskCreate(credPushTask, "credpush", 3072, nullptr, 2, &s_pushTask);
 
     s_active = false;
+    RtcState::get()->delegate_active = 0;
+    RtcState::save();
     ESP_LOGI(TAG, "Setup Delegate ended, mesh rejoin initiated");
 }
 

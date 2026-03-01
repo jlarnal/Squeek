@@ -112,6 +112,9 @@ constexpr gpio_num_t PIEZO_PIN_B = GPIO_NUM_23;  // push-pull complement
 #define MESH_PROMOTE_BASE_MS   10000   // minimum wait before self-promoting to root
 #define MESH_PROMOTE_JITTER_MS 10000   // MAC-based jitter added on top (total: 10-20s)
 
+// Fast-path boot
+#define NVS_DEFAULT_FAST_SCAN  5        // reduced scan wait (seconds) on fast-boot
+
 // BOOT button — GPIO0 on all ESP32 boards, press to force gateway promotion
 #define BOOT_BUTTON_PIN        GPIO_NUM_0
 #define BOOT_BUTTON_DEBOUNCE_MS 50

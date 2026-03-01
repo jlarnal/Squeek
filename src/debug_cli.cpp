@@ -5,7 +5,7 @@
 #include "led_driver.h"
 #include "power_manager.h"
 #include "mesh_conductor.h"
-#include "rtc_mesh_map.h"
+#include "rtc_state.h"
 #include "peer_table.h"
 #include "ftm_manager.h"
 #include "ftm_scheduler.h"
@@ -203,7 +203,7 @@ static void cmd_wifi(const char* args) {
 static void cmd_mesh(const char* args) {
     (void)args;
     Serial.println("Initializing mesh...");
-    RtcMap::init();
+    RtcState::init();
     MeshConductor::init();
     MeshConductor::start();
 
@@ -221,7 +221,7 @@ static void cmd_mesh(const char* args) {
         Serial.println("Mesh timeout -- may still be forming.");
     }
     MeshConductor::printStatus();
-    RtcMap::print();
+    RtcState::print();
 
     MeshConductor::stop();
 }
@@ -240,36 +240,36 @@ static void cmd_elect(const char* args) {
 static void cmd_rtc(const char* args) {
     (void)args;
     Serial.println("RTC memory test...");
-    RtcMap::init();
+    RtcState::init();
 
-    rtc_mesh_map_t* map  = RtcMap::get();
+    rtc_state_t* map  = RtcState::get();
     map->own_short_id    = 42;
     map->mesh_generation = 12345;
     map->peer_count      = 1;
     memset(map->peers[0].mac, 0xAA, 6);
     map->peers[0].short_id = 1;
     map->peers[0].flags    = PEER_FLAG_ALIVE;
-    RtcMap::save();
+    RtcState::save();
 
     Serial.println("Written test data:");
-    RtcMap::print();
+    RtcState::print();
 
-    if (RtcMap::isValid()) {
+    if (RtcState::isValid()) {
         Serial.println("PASS: checksum valid after save.");
     } else {
         Serial.println("FAIL: checksum invalid!");
     }
 
-    RtcMap::clear();
-    if (!RtcMap::isValid()) {
+    RtcState::clear();
+    if (!RtcState::isValid()) {
         Serial.println("PASS: map invalid after clear.");
     } else {
         Serial.println("FAIL: map still valid after clear!");
     }
 
-    RtcMap::init();
+    RtcState::init();
     Serial.println("Re-initialized:");
-    RtcMap::print();
+    RtcState::print();
 }
 
 static void cmd_sleep(const char* args) {

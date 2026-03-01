@@ -177,7 +177,7 @@ Each node maintains a local map of the mesh it belongs to, stored in two tiers:
 | **NvsConfigManager** | `nvs_config.h/cpp`, `property_value.h` | Persistent settings via NVS with auto-sync `PropertyValue<>` template, compile-time hash detection, factory reset |
 | **LedDriver** | `led_driver.h/cpp` | Status + WS2812 RGB control, non-blocking blink task, master enable/disable |
 | **PowerManager** | `power_manager.h/cpp` | Battery ADC (calibrated), low/critical thresholds, sleep wrappers (static class) |
-| **RtcMap** | `rtc_mesh_map.h/cpp` | RTC slow-memory mesh map with checksummed save/restore (static class) |
+| **RtcState** | `rtc_state.h/cpp` | Unified RTC state manager — mesh map + boot flags, `RTC_NOINIT_ATTR` with `esp_rom_crc32_le` CRC32 (survives soft resets, static class) |
 | **MeshConductor** | `mesh_conductor.h/cpp`, `mesh_gateway.cpp`, `mesh_node.cpp` | WiFi mesh join/heal, NVS-tunable weighted gateway election (`double` score), `IMeshRole` strategy (Gateway / MeshNode), message routing |
 | **Localization Engine** | `ftm_manager.h/cpp`, `position_solver.h/cpp` | FTM round scheduling, distance matrix, 3D position solver (trilateration/MDS) |
 | **Audio Engine** | `audio_engine.h/cpp`, `audio_tweeter.h/cpp`, `audio_i2s.h/cpp`, `tone_library.h/cpp`, `sample_player.h/cpp` | Modular: LEDC PWM tone synthesis + MP3 decode → abstract output (piezo driver / I2S driver) |
@@ -242,7 +242,7 @@ LOW_BATTERY → DEEP_SLEEP (timer-only wake for periodic check)
 - [x] LedDriver with non-blocking FreeRTOS blink task, HSV/RGB, master enable/disable
 - [x] Battery voltage ADC via calibrated oneshot + voltage divider (`PowerManager`)
 - [x] Light sleep between heartbeats (via `SQ_POWER_DELAY` macro, suppressed in debug builds)
-- [x] RTC slow-memory mesh map with checksummed save/restore (`RtcMap`)
+- [x] RTC state manager with CRC32-protected mesh map and boot flags (`RtcState`, `RTC_NOINIT_ATTR` + `esp_rom_crc32_le`)
 - [x] NvsConfigManager with `PropertyValue<>` auto-persistence, compile-time settings hash, factory reset
 - [x] Debug CLI — always-on serial CLI with 19 text commands, Tab-cycle history, interactive tone player
 - **Deliverable:** Scatter nodes, they find each other. Kill the gateway, another takes over. Serial CLI for hardware testing.
@@ -333,8 +333,8 @@ LOW_BATTERY → DEEP_SLEEP (timer-only wake for periodic check)
 | `src/led_driver.cpp` | FreeRTOS blink task, master enable/disable, HSV/RGB conversion, duty-cycle blinking | Done |
 | `include/power_manager.h` | `PowerManager` static class — battery ADC, sleep wrappers | Done |
 | `src/power_manager.cpp` | ADC oneshot with curve-fitting calibration, voltage divider math, sleep delegates | Done |
-| `include/rtc_mesh_map.h` | `RtcMap` static class + `rtc_mesh_map_t` struct — RTC slow-memory mesh map | Done |
-| `src/rtc_mesh_map.cpp` | Checksummed save/restore, `RTC_DATA_ATTR` storage, init/clear/print | Done |
+| `include/rtc_state.h` | `RtcState` static class + `rtc_state_t` struct — unified RTC state (mesh map + boot flags) | Done |
+| `src/rtc_state.cpp` | CRC32 save/restore via `esp_rom_crc32_le`, `RTC_NOINIT_ATTR` storage (survives soft resets), init/clear/print | Done |
 | `include/debug_cli.h` | Debug CLI entry point declaration | Done |
 | `src/debug_cli.cpp` | Always-on serial CLI task, 18 commands, Tab-cycle history, interactive tone player | Done |
 

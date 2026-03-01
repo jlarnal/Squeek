@@ -10,7 +10,7 @@ Read the full "./FSD.md" file included in this project's root dir.
 
 **Phase 1 — Mesh & Blink: COMPLETE** (committed and pushed)
 
-Phase 1 delivers: WiFi mesh formation, weighted gateway election (battery + adjacency - tenure + MAC tiebreak), routerless self-promotion with MAC-jittered timers, NVS-backed config with PropertyValue<> auto-persistence, LED driver with save/restore, battery ADC, RTC slow-memory mesh map.
+Phase 1 delivers: WiFi mesh formation, weighted gateway election (battery + adjacency - tenure + MAC tiebreak), routerless self-promotion with MAC-jittered timers, NVS-backed config with PropertyValue<> auto-persistence, LED driver with save/restore, battery ADC, RtcState manager (RTC_NOINIT_ATTR + CRC32, fast-path boot on soft reset).
 
 **Phase 2 — FTM Localization: IMPLEMENTED** (compiles clean, needs hardware verification)
 

@@ -44,6 +44,9 @@ inline constexpr char NVS_KEY_FTM_OFS[]   = "ftmOfs";
 // Phase 5: Web UI
 inline constexpr char NVS_KEY_WEB_EN[]    = "webEn";
 
+// Fast-path boot
+inline constexpr char NVS_KEY_FAST_SCAN[] = "fastScn";
+
 // --- Default values (sourced from BSP defines for single-point maintenance) ---
 
 inline constexpr bool     DEFAULT_LEDS_ENABLED       = NVS_DEFAULT_LEDS_ENABLED;
@@ -74,6 +77,9 @@ inline constexpr uint32_t DEFAULT_CSYNC_INTERVAL_S    = NVS_DEFAULT_CSYNC_INTERV
 
 // Phase 5: Web UI defaults
 inline constexpr bool     DEFAULT_WEB_ENABLED         = NVS_DEFAULT_WEB_ENABLED;
+
+// Fast-path boot
+inline constexpr uint16_t DEFAULT_FAST_SCAN           = NVS_DEFAULT_FAST_SCAN;
 
 // Phase 2: FTM defaults
 inline constexpr uint32_t DEFAULT_FTM_STALE_S        = NVS_DEFAULT_FTM_STALE_S;
@@ -152,6 +158,8 @@ namespace nvs_detail {
         h = fnvU32(h, DEFAULT_CSYNC_INTERVAL_S);
         // Phase 5
         h = fnvBool(h, DEFAULT_WEB_ENABLED);
+        // Fast-path boot
+        h = fnvU32(h, (uint32_t)DEFAULT_FAST_SCAN);
         return h;
     }
 }
@@ -218,6 +226,9 @@ public:
 
     // Phase 5: Web UI
     static PropertyValue<NVS_KEY_WEB_EN, bool, NvsConfigManager> webEnabled;
+
+    // Fast-path boot
+    static PropertyValue<NVS_KEY_FAST_SCAN, uint16_t, NvsConfigManager> fastScanDelay_s;
 };
 
 #endif // NVS_CONFIG_H

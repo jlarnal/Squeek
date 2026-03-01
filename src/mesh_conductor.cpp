@@ -4,7 +4,7 @@
 #include "ftm_scheduler.h"
 #include "nvs_config_registry.h"
 #include "bsp.hpp"
-#include "rtc_mesh_map.h"
+#include "rtc_state.h"
 #include "power_manager.h"
 #include "nvs_config.h"
 #include "sq_log.h"
@@ -51,6 +51,7 @@ static TaskHandle_t  s_electTaskHandle = nullptr;
 static ElectionScore s_scores[MESH_MAX_NODES];
 static uint8_t     s_scoreCount     = 0;
 static uint16_t    s_gwTenure       = 0;        // cached from NVS
+static bool        s_fastBoot       = false;
 
 // BOOT button — force gateway promotion
 static void promoteTimerCb(TimerHandle_t t);  // forward decl
@@ -113,8 +114,8 @@ static void nvsWriteTenure() {
 
 // --- RTC map update (carried over from mesh_manager) ---
 
-static void updateRtcMap() {
-    rtc_mesh_map_t* map = RtcMap::get();
+static void updateRtcState() {
+    rtc_state_t* map = RtcState::get();
     map->own_role = (s_role && s_role->isGateway()) ? 1 : 0;
     map->mesh_channel = MESH_CHANNEL;
 
@@ -140,7 +141,7 @@ static void updateRtcMap() {
         memcpy(map->gateway_mac, own_mac, 6);
     }
 
-    RtcMap::save();
+    RtcState::save();
 }
 
 // --- Election logic ---
@@ -690,7 +691,7 @@ static void promoteTimerCb(TimerHandle_t t) {
     // Manually mark connected and kick off the election.
     s_connected = true;
     s_parentRetries = 0;
-    updateRtcMap();
+    updateRtcState();
 
     if (!s_electionDone) {
         startSettleTimer();
@@ -739,7 +740,7 @@ static void meshEventHandler(void* arg, esp_event_base_t event_base,
         if (esp_mesh_is_root()) {
             SqLog.println("[mesh] I am ROOT");
         }
-        updateRtcMap();
+        updateRtcState();
 
         // Send heartbeat immediately so the gateway adds us to PeerTable
         // before the election completes (election can take 3s settle + 15s timeout)
@@ -769,7 +770,7 @@ static void meshEventHandler(void* arg, esp_event_base_t event_base,
     case MESH_EVENT_PARENT_DISCONNECTED:
         SqLog.println("[mesh] Parent disconnected");
         s_connected = false;
-        updateRtcMap();
+        updateRtcState();
         if (s_role && !s_role->isGateway()) {
             ((MeshNode*)s_role)->onGatewayLost();
         }
@@ -781,7 +782,7 @@ static void meshEventHandler(void* arg, esp_event_base_t event_base,
             child->mac[0], child->mac[1], child->mac[2],
             child->mac[3], child->mac[4], child->mac[5]);
         if (s_role) s_role->onPeerJoined(child->mac);
-        updateRtcMap();
+        updateRtcState();
 
         // Re-run election so the new child can participate
         if (s_electionDone && esp_mesh_is_root()) {
@@ -799,13 +800,13 @@ static void meshEventHandler(void* arg, esp_event_base_t event_base,
             child->mac[0], child->mac[1], child->mac[2],
             child->mac[3], child->mac[4], child->mac[5]);
         if (s_role) s_role->onPeerLeft(child->mac);
-        updateRtcMap();
+        updateRtcState();
         break;
     }
 
     case MESH_EVENT_ROUTING_TABLE_ADD:
     case MESH_EVENT_ROUTING_TABLE_REMOVE:
-        updateRtcMap();
+        updateRtcState();
         break;
 
     case MESH_EVENT_ROOT_ADDRESS: {
@@ -813,9 +814,9 @@ static void meshEventHandler(void* arg, esp_event_base_t event_base,
         SqLog.printf("[mesh] Root address: %02X:%02X:%02X:%02X:%02X:%02X\n",
             root->addr[0], root->addr[1], root->addr[2],
             root->addr[3], root->addr[4], root->addr[5]);
-        rtc_mesh_map_t* map = RtcMap::get();
+        rtc_state_t* map = RtcState::get();
         memcpy(map->gateway_mac, root->addr, 6);
-        updateRtcMap();
+        updateRtcState();
         break;
     }
 
@@ -991,6 +992,24 @@ void MeshConductor::start() {
 
     ESP_ERROR_CHECK(esp_mesh_start());
     SqLog.println("[mesh] Mesh starting...");
+
+    // Fast-path: if RTC says we were gateway, schedule immediate self-promotion
+    // instead of waiting for 60+ mesh scans to trigger NO_PARENT_FOUND.
+    if (s_fastBoot && s_promoteTimer == nullptr) {
+        uint16_t delaySec = (uint16_t)NvsConfigManager::fastScanDelay_s;
+        if (delaySec < 1)  delaySec = 1;
+        if (delaySec > 60) delaySec = 60;
+        SqLog.printf("[mesh] Fast-boot: scheduling promotion in %u s\n", delaySec);
+        s_promoteTimer = xTimerCreate("promote",
+            pdMS_TO_TICKS(delaySec * 1000),
+            pdFALSE, nullptr, promoteTimerCb);
+        xTimerStart(s_promoteTimer, 0);
+        s_fastBoot = false;  // one-shot
+    }
+}
+
+void MeshConductor::setFastBoot(bool fast) {
+    s_fastBoot = fast;
 }
 
 void MeshConductor::stop() {

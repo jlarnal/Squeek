@@ -1,7 +1,7 @@
 idf_component_register(SRCS
     "main.cpp"
     "led_driver.cpp"
-    "rtc_mesh_map.cpp"
+    "rtc_state.cpp"
     "power_manager.cpp"
     "mesh_conductor.cpp"
     "mesh_gateway.cpp"

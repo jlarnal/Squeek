@@ -11,6 +11,7 @@
 #include "clock_sync.h"
 #include "web_server.h"
 #include "setup_delegate.h"
+#include "rtc_state.h"
 #include <Arduino.h>
 #include <esp_wifi.h>
 #include <esp_mac.h>
@@ -26,6 +27,10 @@ static void gwHeartbeatCb(TimerHandle_t t) {
 void Gateway::begin() {
     m_peerCount = 0;
     SqLog.println("[gateway] Gateway role active");
+
+    // Clear delegate flag — we're running as gateway now
+    RtcState::get()->delegate_active = 0;
+    RtcState::save();
 
     // Initialize Phase 2 subsystems
     PeerTable::init();

@@ -5,7 +5,8 @@
 #include "led_driver.h"
 #include "power_manager.h"
 #include "mesh_conductor.h"
-#include "rtc_mesh_map.h"
+#include "rtc_state.h"
+#include "sq_log.h"
 #include "audio_tweeter.h"
 #include "audio_engine.h"
 #include "orchestrator.h"
@@ -31,7 +32,14 @@ void setup()
 #endif
 
     PowerManager::init();
-    RtcMap::init();
+    RtcState::init();
+
+    // Fast-path: if RTC survived a soft reset and we were gateway, skip long mesh scan
+    if (RtcState::isValid() && RtcState::get()->own_role == 1) {
+        SqLog.println("[boot] RTC valid, was gateway — enabling fast-boot");
+        MeshConductor::setFastBoot(true);
+    }
+
     MeshConductor::init();
     MeshConductor::start();
 
@@ -55,7 +63,7 @@ void loop()
         LedDriver::rgbBlink(RgbColor(NvsConfigManager::colorDisconnected),500,1000); // red = disconnected
     }
 
-    RtcMap::save();
+    RtcState::save();
 
     SQ_POWER_DELAY(5000);
 }

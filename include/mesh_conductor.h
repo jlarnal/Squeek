@@ -247,6 +247,9 @@ public:
     static bool sendConfigReq(const uint8_t* sta_mac, const char* json, uint8_t reqId);
     static bool waitConfigResp(char* outBuf, size_t bufSize, uint32_t timeout_ms);
 
+    // Fast-path boot
+    static void setFastBoot(bool fast);
+
     // Debug
     static void forceReelection();
 
