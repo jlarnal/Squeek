@@ -217,6 +217,7 @@ static void assignRole(const uint8_t* winnerMac) {
     s_electionDone = true;
     s_role = newRole;
     s_role->begin();
+    updateRtcState();  // persist new role to RTC for fast-path boot
 }
 
 static const uint8_t* pickWinner() {
