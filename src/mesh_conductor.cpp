@@ -903,16 +903,16 @@ void MeshConductor::init() {
     ESP_ERROR_CHECK(esp_event_handler_register(MESH_EVENT, ESP_EVENT_ANY_ID,
                                                 &meshEventHandler, NULL));
 
-    // BOOT button (GPIO0) — press to force gateway self-promotion
+    // BOOT button (GPIO9) — press to force gateway self-promotion
     gpio_config_t btn_cfg = {};
     btn_cfg.pin_bit_mask = (1ULL << BOOT_BUTTON_PIN);
     btn_cfg.mode = GPIO_MODE_INPUT;
     btn_cfg.pull_up_en = GPIO_PULLUP_ENABLE;
     btn_cfg.intr_type = GPIO_INTR_ANYEDGE;
     gpio_config(&btn_cfg);
-    gpio_install_isr_service(0);
+    gpio_install_isr_service(0);  // OK if already installed (ESP_ERR_INVALID_STATE)
     gpio_isr_handler_add(BOOT_BUTTON_PIN, bootButtonISR, nullptr);
-    SqLog.println("[mesh] BOOT button (GPIO0) — press to force promotion");
+    SqLog.println("[mesh] BOOT button (GPIO9) — press to force promotion");
 }
 
 void MeshConductor::start() {
