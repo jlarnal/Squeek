@@ -1,5 +1,20 @@
 {
-  "platformio": "C:/Users/arnal/.platformio/penv/Scripts/platformio.exe",
-  "python": "C:/espressif/tools/python/v5.5.2/venv/Scripts/python.exe",
+  "_platformio_help": "Path to the PlatformIO CLI executable. Supports env vars (%USERPROFILE%, $HOME) and ~/",
+  "_platformio_examples": [
+    "Windows: %USERPROFILE%/.platformio/penv/Scripts/platformio.exe",
+    "Linux/Mac: ~/.platformio/penv/bin/platformio"
+  ],
+  "platformio": "%USERPROFILE%/.platformio/penv/Scripts/platformio.exe",
+
+  "_esptool_help": "Path to the esptool executable (standalone or from ESP-IDF/PlatformIO venv)",
+  "_esptool_examples": [
+    "Windows (ESP-IDF): C:/Espressif/tools/python/v5.5.2/venv/Scripts/esptool.exe",
+    "Windows (PIO):     %USERPROFILE%/.platformio/packages/tool-esptoolpy/esptool.exe",
+    "Linux/Mac (PIO):   ~/.platformio/packages/tool-esptoolpy/esptool.py",
+    "Linux/Mac (pip):   esptool"
+  ],
+  "esptool": "C:/Espressif/tools/python/v5.5.2/venv/Scripts/esptool.exe",
+
+  "_baud_help": "Upload baud rate (default 460800 if omitted)",
   "baud": 460800
 }
