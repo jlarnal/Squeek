@@ -9,6 +9,7 @@
 #include "audio_tweeter.h"
 #include "audio_engine.h"
 #include "orchestrator.h"
+#include "setup_delegate.h"
 
 #ifdef DEBUG_MENU_ENABLED
 #include "debug_cli.h"
@@ -43,8 +44,10 @@ void setup()
 
 void loop()
 {
-    // Heartbeat: brief RGB flash to show mesh state
-    if (MeshConductor::isGateway()) {
+    // Heartbeat: brief RGB flash to show mesh/delegate state
+    if (SetupDelegate::isActive()) {
+        LedDriver::rgbBlink(RgbColor(40, 0, 30), 2000, 5000); // dark magenta = delegate
+    } else if (MeshConductor::isGateway()) {
         LedDriver::rgbBlink(RgbColor(NvsConfigManager::colorGateway),2000,500); // blue = gateway
     } else if (MeshConductor::isConnected()) {
         LedDriver::rgbBlink(RgbColor(NvsConfigManager::colorPeer),2000,500); // green = connected peer

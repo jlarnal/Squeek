@@ -816,7 +816,9 @@ static void cmd_status(const char* args) {
     Serial.printf("Squeek v%s\n", SQUEEK_VERSION);
     Serial.printf("Battery: %lu mV\n", PowerManager::batteryMv());
     Serial.printf("Mesh connected: %s\n", MeshConductor::isConnected() ? "yes" : "no");
-    Serial.printf("Role: %s\n", MeshConductor::isGateway() ? "GATEWAY" : "NODE");
+    const char* role = SetupDelegate::isActive() ? "DELEGATE"
+                     : MeshConductor::isGateway()  ? "GATEWAY" : "NODE";
+    Serial.printf("Role: %s\n", role);
     if (MeshConductor::isConnected()) {
         MeshConductor::printStatus();
     }

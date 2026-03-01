@@ -8,6 +8,7 @@
 #include <ESPAsyncWebServer.h>
 #include <WiFi.h>
 #include <esp_wifi.h>
+#include <esp_netif.h>
 #include <esp_mesh.h>
 #include <esp_log.h>
 #include <freertos/FreeRTOS.h>
@@ -107,13 +108,20 @@ void SetupDelegate::startSoftAP(const uint8_t gatewayMac[6]) {
     snprintf(ssid, sizeof(ssid), "Squeek_Config_%02X%02X",
              gatewayMac[4], gatewayMac[5]);
 
-    // Stop mesh to free WiFi for standalone AP.
-    // Don't deinit mesh — that's needed for rejoin later.
-    // Don't create new netifs — mesh already created AP+STA netifs.
+    // Stop mesh and WiFi completely so we can swap netifs before restarting.
     esp_mesh_stop();
     vTaskDelay(pdMS_TO_TICKS(500));
+    esp_wifi_stop();
 
-    // Reconfigure the existing AP with our SSID (no password, open)
+    // Mesh netifs have DHCP_SERVER stripped — destroy and replace with a standard
+    // AP netif that has DHCP built in. Must happen while WiFi is stopped so the
+    // driver binds to the new netif on esp_wifi_start().
+    esp_netif_t* nif;
+    if ((nif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF")))  esp_netif_destroy(nif);
+    if ((nif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF"))) esp_netif_destroy(nif);
+    esp_netif_t* ap_netif = esp_netif_create_default_wifi_ap();
+
+    // Configure and start WiFi in AP-only mode
     wifi_config_t ap_cfg = {};
     strncpy((char*)ap_cfg.ap.ssid, ssid, sizeof(ap_cfg.ap.ssid));
     ap_cfg.ap.ssid_len = strlen(ssid);
@@ -125,21 +133,36 @@ void SetupDelegate::startSoftAP(const uint8_t gatewayMac[6]) {
     esp_wifi_set_config(WIFI_IF_AP, &ap_cfg);
     esp_wifi_start();
 
-    // Wait for AP to be ready and get IP
-    vTaskDelay(pdMS_TO_TICKS(500));
-
-    esp_netif_ip_info_t ip_info = {};
-    esp_netif_t* ap_netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
     if (ap_netif) {
-        esp_netif_get_ip_info(ap_netif, &ip_info);
+        // Set our preferred IP (standard AP netif defaults to 192.168.4.1 anyway,
+        // but be explicit). DHCP server is auto-started by the event handler.
+        esp_netif_dhcps_stop(ap_netif);
+        esp_netif_ip_info_t ip_info = {};
+        IP4_ADDR(&ip_info.ip,      192, 168, 4, 1);
+        IP4_ADDR(&ip_info.gw,      192, 168, 4, 1);
+        IP4_ADDR(&ip_info.netmask, 255, 255, 255, 0);
+        esp_netif_set_ip_info(ap_netif, &ip_info);
+
+        esp_err_t err = esp_netif_dhcps_start(ap_netif);
+        ESP_LOGI(TAG, "SoftAP started: %s (IP=" IPSTR ") dhcp=%s",
+                 ssid, IP2STR(&ip_info.ip),
+                 err == ESP_OK ? "ok" : esp_err_to_name(err));
+    } else {
+        ESP_LOGW(TAG, "SoftAP started: %s (failed to create AP netif)", ssid);
     }
-    ESP_LOGI(TAG, "SoftAP started: %s (IP=" IPSTR ")", ssid, IP2STR(&ip_info.ip));
 }
 
 void SetupDelegate::stopSoftAP() {
     WiFi.softAPdisconnect(true);
     WiFi.mode(WIFI_OFF);
     vTaskDelay(pdMS_TO_TICKS(200));
+
+    // Destroy standard AP/STA netifs, restore mesh netifs for rejoin
+    esp_netif_t* nif;
+    if ((nif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF")))  esp_netif_destroy(nif);
+    if ((nif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF"))) esp_netif_destroy(nif);
+    esp_netif_create_default_wifi_mesh_netifs(NULL, NULL);
+    ESP_LOGI(TAG, "Restored mesh netifs for rejoin");
 }
 
 // ---------------------------------------------------------------------------
