@@ -48,6 +48,10 @@ PropertyValue<NVS_KEY_WEB_EN, bool, NvsConfigManager> NvsConfigManager::webEnabl
 PropertyValue<NVS_KEY_FAST_SCAN, uint16_t, NvsConfigManager>
     NvsConfigManager::fastScanDelay_s{DEFAULT_FAST_SCAN};
 
+// Delegate
+PropertyValue<NVS_KEY_DLG_TMO, uint16_t, NvsConfigManager>
+    NvsConfigManager::delegateTimeout_s{DEFAULT_DELEGATE_TMO};
+
 // Phase 4: Orchestrator
 PropertyValue<NVS_KEY_ORCH_MODE, uint32_t, NvsConfigManager> NvsConfigManager::orchMode(DEFAULT_ORCH_MODE);
 PropertyValue<NVS_KEY_ORCH_TRVD, uint32_t, NvsConfigManager> NvsConfigManager::orchTravelDelay_ms(DEFAULT_ORCH_TRAVEL_DELAY);
@@ -190,6 +194,7 @@ void NvsConfigManager::reloadFromNvs()
 
     // Fast-path boot
     fastScanDelay_s.loadInitial(nvsGetU16(NVS_KEY_FAST_SCAN, DEFAULT_FAST_SCAN));
+    delegateTimeout_s.loadInitial(nvsGetU16(NVS_KEY_DLG_TMO, DEFAULT_DELEGATE_TMO));
 
     ESP_LOGI(TAG, "Config loaded from NVS");
 }
@@ -240,6 +245,7 @@ bool NvsConfigManager::restoreFactoryDefault(uint32_t safeKey)
 
     // Fast-path boot
     fastScanDelay_s       = DEFAULT_FAST_SCAN;
+    delegateTimeout_s     = DEFAULT_DELEGATE_TMO;
 
     return true;
 }

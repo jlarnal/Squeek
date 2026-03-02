@@ -10,7 +10,7 @@
 #include "audio_tweeter.h"
 #include "audio_engine.h"
 #include "orchestrator.h"
-#include "setup_delegate.h"
+#include "mesh_delegate.h"
 
 #ifdef DEBUG_MENU_ENABLED
 #include "debug_cli.h"
@@ -34,36 +34,53 @@ void setup()
     PowerManager::init();
     RtcState::init();
 
-    // Fast-path: if RTC survived a soft reset and we were gateway, skip long mesh scan
-    if (RtcState::isValid() && RtcState::get()->own_role == 1) {
-        SqLog.println("[boot] RTC valid, was gateway — enabling fast-boot");
+    // Read next_role and clear it (one-shot: crash falls back to election)
+    uint8_t nextRole = RtcState::get()->next_role;
+    RtcState::get()->next_role = 0xFF;
+    RtcState::save();
+
+    if (nextRole == (uint8_t)RoleId::DELEGATE) {
+        SqLog.println("[boot] RTC says DELEGATE — entering setup mode");
+        MeshConductor::init();  // WiFi/netif init only
+        MeshConductor::setRole(new Delegate());
+    } else if (nextRole == (uint8_t)RoleId::GATEWAY) {
+        SqLog.println("[boot] RTC says GATEWAY — fast-boot");
         MeshConductor::setFastBoot(true);
+        MeshConductor::init();
+        MeshConductor::start();
+    } else if (nextRole == (uint8_t)RoleId::PEER) {
+        SqLog.println("[boot] RTC says PEER — fast-boot");
+        MeshConductor::setFastBoot(true);
+        MeshConductor::init();
+        MeshConductor::start();
+    } else {
+        SqLog.println("[boot] Normal boot — mesh scan + election");
+        MeshConductor::init();
+        MeshConductor::start();
     }
 
-    MeshConductor::init();
-    MeshConductor::start();
-
-    PiezoDriver::instance().begin();
-    AudioEngine::init(&PiezoDriver::instance());
-    Orchestrator::init();
+    if (nextRole != (uint8_t)RoleId::DELEGATE) {
+        PiezoDriver::instance().begin();
+        AudioEngine::init(&PiezoDriver::instance());
+        Orchestrator::init();
+    }
 
     LedDriver::rgbSet(RgbColor(NvsConfigManager::colorReady)); // dim green = init done.
 }
 
 void loop()
 {
-    // Heartbeat: brief RGB flash to show mesh/delegate state
-    if (SetupDelegate::isActive()) {
-        LedDriver::rgbBlink(RgbColor(40, 0, 30), 2000, 500); // dark magenta = delegate
+    IMeshRole* role = MeshConductor::role();
+    if (role && role->roleId() == RoleId::DELEGATE) {
+        LedDriver::rgbBlink(RgbColor(40, 0, 30), 2000, 500);
     } else if (MeshConductor::isGateway()) {
-        LedDriver::rgbBlink(RgbColor(NvsConfigManager::colorGateway),2000,500); // blue = gateway
+        LedDriver::rgbBlink(RgbColor(NvsConfigManager::colorGateway),2000,500);
     } else if (MeshConductor::isConnected()) {
-        LedDriver::rgbBlink(RgbColor(NvsConfigManager::colorPeer),2000,500); // green = connected peer
+        LedDriver::rgbBlink(RgbColor(NvsConfigManager::colorPeer),2000,500);
     } else {
-        LedDriver::rgbBlink(RgbColor(NvsConfigManager::colorDisconnected),500,500); // red = disconnected
+        LedDriver::rgbBlink(RgbColor(NvsConfigManager::colorDisconnected),500,500);
     }
 
     RtcState::save();
-
     SQ_POWER_DELAY(5000);
 }

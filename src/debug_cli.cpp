@@ -17,7 +17,7 @@
 #include "orchestrator.h"
 #include "clock_sync.h"
 #include "web_server.h"
-#include "setup_delegate.h"
+#include "mesh_delegate.h"
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <esp_system.h>
@@ -176,7 +176,8 @@ static void cmd_wifi(const char* args) {
         bool hasCreds = SqWebServer::loadWifiCreds(ssid, sizeof(ssid), pass, sizeof(pass));
         Serial.printf("Stored SSID: %s\n", hasCreds ? ssid : "(none)");
         Serial.printf("Web server: %s\n", SqWebServer::isRunning() ? "running" : "stopped");
-        Serial.printf("Setup Delegate: %s\n", SetupDelegate::isActive() ? "ACTIVE" : "inactive");
+        IMeshRole* r = MeshConductor::role();
+        Serial.printf("Setup Delegate: %s\n", (r && r->roleId() == RoleId::DELEGATE) ? "ACTIVE" : "inactive");
         Serial.printf("WiFi mode: %d\n", WiFi.getMode());
         if (WiFi.isConnected()) {
             Serial.printf("STA connected: %s  IP=%s  RSSI=%d\n",
@@ -186,13 +187,16 @@ static void cmd_wifi(const char* args) {
                       WiFi.softAPIP().toString().c_str(), WiFi.softAPgetStationNum());
     }
     else if (strcmp(sub, "delegate") == 0) {
-        if (SetupDelegate::isActive()) {
+        IMeshRole* r = MeshConductor::role();
+        if (r && r->roleId() == RoleId::DELEGATE) {
             Serial.println("Setup Delegate already active");
         } else {
-            uint8_t mac[6];
-            esp_read_mac(mac, ESP_MAC_WIFI_STA);
-            Serial.println("Starting Setup Delegate mode...");
-            SetupDelegate::begin(mac);
+            Serial.println("Rebooting into Setup Delegate mode...");
+            rtc_state_t* rtc = RtcState::get();
+            rtc->next_role = (uint8_t)RoleId::DELEGATE;
+            RtcState::save();
+            vTaskDelay(pdMS_TO_TICKS(200));
+            esp_restart();
         }
     }
     else {
@@ -816,7 +820,8 @@ static void cmd_status(const char* args) {
     Serial.printf("Squeek v%s\n", SQUEEK_VERSION);
     Serial.printf("Battery: %lu mV\n", PowerManager::batteryMv());
     Serial.printf("Mesh connected: %s\n", MeshConductor::isConnected() ? "yes" : "no");
-    const char* role = SetupDelegate::isActive() ? "DELEGATE"
+    IMeshRole* r = MeshConductor::role();
+    const char* role = (r && r->roleId() == RoleId::DELEGATE) ? "DELEGATE"
                      : MeshConductor::isGateway()  ? "GATEWAY" : "NODE";
     Serial.printf("Role: %s\n", role);
     if (MeshConductor::isConnected()) {

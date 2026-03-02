@@ -11,6 +11,7 @@
 #include "orchestrator.h"
 #include "clock_sync.h"
 #include "web_server.h"
+#include "mesh_delegate.h"
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <string.h>
@@ -32,8 +33,8 @@ static bool        s_connected      = false;
 static bool        s_started        = false;
 static bool        s_electionDone   = false;
 static uint8_t     s_meshId[6]      = { 0x53, 0x51, 0x45, 0x45, 0x4B, 0x00 }; // "SQUEEK"
-static Gateway     s_gateway;
-static MeshNode    s_meshNode;
+// Role objects are now heap-allocated via MeshConductor::setRole()
+// (no more static Gateway/MeshNode — reboot switches role)
 
 // Peer shadow (non-gateway nodes receive this from gateway)
 static PeerSyncEntry s_peerShadow[MESH_MAX_NODES];
@@ -116,7 +117,7 @@ static void nvsWriteTenure() {
 
 static void updateRtcState() {
     rtc_state_t* map = RtcState::get();
-    map->own_role = (s_role && s_role->isGateway()) ? 1 : 0;
+    map->own_role = s_role ? static_cast<uint8_t>(s_role->roleId()) : 0;
     map->mesh_channel = MESH_CHANNEL;
 
     mesh_addr_t routing_table[MESH_MAX_NODES];
@@ -192,32 +193,49 @@ static void assignRole(const uint8_t* winnerMac) {
     uint8_t own_mac[6];
     esp_read_mac(own_mac, ESP_MAC_WIFI_STA);
 
-    // Track logical gateway MAC on all nodes
     memcpy(s_gatewayMac, winnerMac, 6);
 
-    IMeshRole* newRole;
-    if (memcmp(own_mac, winnerMac, 6) == 0) {
+    bool iAmWinner = (memcmp(own_mac, winnerMac, 6) == 0);
+
+    if (iAmWinner) {
         s_gwTenure++;
         nvsWriteTenure();
-        newRole = &s_gateway;
         SqLog.println("[mesh] Role assigned: GATEWAY");
     } else {
-        newRole = &s_meshNode;
         SqLog.printf("[mesh] Role assigned: NODE (gateway=%02X:%02X:%02X:%02X:%02X:%02X)\n",
             winnerMac[0], winnerMac[1], winnerMac[2],
             winnerMac[3], winnerMac[4], winnerMac[5]);
     }
 
-    // Skip transition if already in the correct role
-    if (s_role == newRole) {
+    RoleId target = iAmWinner ? RoleId::GATEWAY : RoleId::PEER;
+
+    // If already in the correct role, just continue
+    if (s_role && s_role->roleId() == target) {
         s_electionDone = true;
+        updateRtcState();
         return;
     }
-    if (s_role) s_role->end();
-    s_electionDone = true;
-    s_role = newRole;
-    s_role->begin();
-    updateRtcState();  // persist new role to RTC for fast-path boot
+
+    // If no role yet (first election after boot), instantiate directly
+    if (!s_role) {
+        s_electionDone = true;
+        s_role = (target == RoleId::GATEWAY)
+            ? static_cast<IMeshRole*>(new Gateway())
+            : static_cast<IMeshRole*>(new MeshNode());
+        s_role->begin();
+        updateRtcState();
+        return;
+    }
+
+    // Role actually changed — reboot into it
+    rtc_state_t* rtc = RtcState::get();
+    rtc->next_role = (uint8_t)target;
+    RtcState::save();
+
+    SqLog.printf("[mesh] Role changed — rebooting into %s\n",
+        target == RoleId::GATEWAY ? "GATEWAY" : "PEER");
+    vTaskDelay(pdMS_TO_TICKS(200));
+    esp_restart();
 }
 
 static const uint8_t* pickWinner() {
@@ -248,10 +266,17 @@ static void electionTimerCallback(TimerHandle_t xTimer) {
         int totalNodes = esp_mesh_get_total_node_num();
         if ((int)s_scoreCount < totalNodes) {
             SqLog.println("[mesh] Election timeout (non-root) — accepting peer role");
-            if (s_role != &s_meshNode) {
-                if (s_role) s_role->end();
-                s_role = &s_meshNode;
+            if (s_role && s_role->roleId() != RoleId::PEER) {
+                // Was a different role — reboot to switch
+                rtc_state_t* rtc = RtcState::get();
+                rtc->next_role = (uint8_t)RoleId::PEER;
+                RtcState::save();
+                esp_restart();
+            }
+            if (!s_role) {
+                s_role = new MeshNode();
                 s_role->begin();
+                updateRtcState();
             }
             s_electionDone = true;
             return;
@@ -308,9 +333,12 @@ static void electionTimerCallback(TimerHandle_t xTimer) {
             assignRole(own_mac);
         } else {
             // We're not root and got no scores — become node
-            s_role = &s_meshNode;
+            if (!s_role) {
+                s_role = new MeshNode();
+                s_role->begin();
+                updateRtcState();
+            }
             s_electionDone = true;
-            s_role->begin();
         }
     }
 }
@@ -440,7 +468,7 @@ static void meshRxTask(void* pvParameters) {
 
             if (msgType == MSG_TYPE_HEARTBEAT && data.size >= sizeof(HeartbeatMsg)) {
                 HeartbeatMsg* hb = (HeartbeatMsg*)rx_buf;
-                if (s_role && s_role->isGateway()) {
+                if (s_role && s_role->roleId() == RoleId::GATEWAY) {
                     PeerTable::updateFromHeartbeat(hb->mac, hb->battery_mv,
                                                     hb->flags, hb->softap_mac);
                 }
@@ -455,13 +483,13 @@ static void meshRxTask(void* pvParameters) {
             }
             else if (msgType == MSG_TYPE_FTM_READY && data.size >= sizeof(FtmReadyMsg)) {
                 FtmReadyMsg* ready = (FtmReadyMsg*)rx_buf;
-                if (s_role && s_role->isGateway()) {
+                if (s_role && s_role->roleId() == RoleId::GATEWAY) {
                     FtmScheduler::onFtmReady(ready->mac);
                 }
             }
             else if (msgType == MSG_TYPE_FTM_RESULT && data.size >= sizeof(FtmResultMsg)) {
                 FtmResultMsg* result = (FtmResultMsg*)rx_buf;
-                if (s_role && s_role->isGateway()) {
+                if (s_role && s_role->roleId() == RoleId::GATEWAY) {
                     FtmScheduler::onFtmResult(result->initiator, result->responder,
                                                result->distance_cm, result->status);
                 }
@@ -571,29 +599,25 @@ static void meshRxTask(void* pvParameters) {
                 memcpy(s_gatewayMac, rc->new_gw, 6);
 
                 if (memcmp(own_mac, rc->new_gw, 6) == 0) {
-                    // I am the new gateway — seed PeerTable from shadow, become Gateway
-                    SqLog.println("[mesh] I am the new gateway!");
-                    if (s_role) s_role->end();
-                    s_role = &s_gateway;
-                    s_role->begin();
-                    // Seed PeerTable from peerShadow (received via PEER_SYNC before role change)
-                    PeerTable::seedFromShadow(s_peerShadow, s_peerShadowCount);
-                    s_electionDone = true;
+                    SqLog.println("[mesh] I am the new gateway — rebooting!");
+                    rtc_state_t* rtc = RtcState::get();
+                    rtc->next_role = (uint8_t)RoleId::GATEWAY;
+                    RtcState::save();
+                    vTaskDelay(pdMS_TO_TICKS(200));
+                    esp_restart();
                 } else {
-                    // I am not the new gateway — ensure I am NODE role
-                    if (s_role && s_role->isGateway()) {
-                        // This shouldn't happen (gateway sends the message, not receives it)
-                        // but handle defensively
-                        if (s_role) s_role->end();
-                        s_role = &s_meshNode;
-                        s_role->begin();
+                    if (s_role && s_role->roleId() == RoleId::GATEWAY) {
+                        rtc_state_t* rtc = RtcState::get();
+                        rtc->next_role = (uint8_t)RoleId::PEER;
+                        RtcState::save();
+                        vTaskDelay(pdMS_TO_TICKS(200));
+                        esp_restart();
                     }
-                    // If already a node, just update gateway MAC (already done above)
                 }
             }
             else if (msgType == MSG_TYPE_NOMINATE && data.size >= sizeof(NominateMsg)) {
                 NominateMsg* nom = (NominateMsg*)rx_buf;
-                if (s_role && s_role->isGateway()) {
+                if (s_role && s_role->roleId() == RoleId::GATEWAY) {
                     SqLog.printf("[mesh] NOMINATE received from %02X:%02X:%02X:%02X:%02X:%02X\n",
                         nom->mac[0], nom->mac[1], nom->mac[2],
                         nom->mac[3], nom->mac[4], nom->mac[5]);
@@ -642,10 +666,16 @@ static void meshRxTask(void* pvParameters) {
                 }
             }
             else if (msgType == MSG_TYPE_SETUP_DELEGATE && data.size >= sizeof(SetupDelegateMsg)) {
-                SetupDelegateMsg* sd = (SetupDelegateMsg*)rx_buf;
-                SqLog.println("[mesh] Designated as Setup Delegate");
-                // TODO: trigger SetupDelegate::begin(sd->gateway_mac) in Task 8
-                (void)sd;
+                SqLog.println("[mesh] Designated as Setup Delegate — rebooting");
+                rtc_state_t* rtc = RtcState::get();
+                rtc->next_role = (uint8_t)RoleId::DELEGATE;
+                RtcState::save();
+                vTaskDelay(pdMS_TO_TICKS(200));
+                esp_restart();
+            }
+            else if (msgType == MSG_TYPE_DELEGATE_RESULT && data.size >= sizeof(DelegateResultMsg)) {
+                DelegateResultMsg* dr = (DelegateResultMsg*)rx_buf;
+                SqLog.printf("[mesh] Delegate result: %s\n", dr->success ? "creds obtained" : "failed");
             }
         }
 
@@ -772,8 +802,8 @@ static void meshEventHandler(void* arg, esp_event_base_t event_base,
         SqLog.println("[mesh] Parent disconnected");
         s_connected = false;
         updateRtcState();
-        if (s_role && !s_role->isGateway()) {
-            ((MeshNode*)s_role)->onGatewayLost();
+        if (s_role && s_role->roleId() == RoleId::PEER) {
+            static_cast<MeshNode*>(s_role)->onGatewayLost();
         }
         break;
 
@@ -986,8 +1016,9 @@ void MeshConductor::start() {
     }
 
     // Reset election state
-    s_electionDone = false;
-    s_role = nullptr;
+    // Don't reset s_role here — it may have been set by boot path
+    // s_role = nullptr;  // removed: boot path sets role from RtcState
+    s_electionDone = (s_role != nullptr);  // if role pre-assigned, skip election
     s_scoreCount = 0;
     s_parentRetries = 0;
 
@@ -1016,6 +1047,7 @@ void MeshConductor::setFastBoot(bool fast) {
 void MeshConductor::stop() {
     if (s_role) {
         s_role->end();
+        delete s_role;
         s_role = nullptr;
     }
     if (s_settleTimer) {
@@ -1038,11 +1070,23 @@ bool MeshConductor::isConnected() {
 }
 
 bool MeshConductor::isGateway() {
-    return s_role && s_role->isGateway();
+    return s_role && s_role->roleId() == RoleId::GATEWAY;
 }
 
 IMeshRole* MeshConductor::role() {
     return s_role;
+}
+
+void MeshConductor::setRole(IMeshRole* role) {
+    if (s_role) {
+        s_role->end();
+        delete s_role;
+    }
+    s_role = role;
+    if (s_role) {
+        s_electionDone = true;
+        s_role->begin();
+    }
 }
 
 void MeshConductor::printStatus() {
@@ -1051,7 +1095,10 @@ void MeshConductor::printStatus() {
     Serial.printf("Connected: %s\n", s_connected ? "yes" : "no");
     Serial.printf("Is Root: %s\n", esp_mesh_is_root() ? "yes" : "no");
     Serial.printf("Election done: %s\n", s_electionDone ? "yes" : "no");
-    Serial.printf("Role: %s\n", s_role ? (s_role->isGateway() ? "GATEWAY" : "NODE") : "none");
+    const char* roleName = !s_role ? "none"
+        : s_role->roleId() == RoleId::GATEWAY ? "GATEWAY"
+        : s_role->roleId() == RoleId::DELEGATE ? "DELEGATE" : "NODE";
+    Serial.printf("Role: %s\n", roleName);
     Serial.printf("Layer: %d\n", esp_mesh_get_layer());
     Serial.printf("Gateway tenure: %u\n", s_gwTenure);
 
@@ -1102,7 +1149,7 @@ uint8_t MeshConductor::peerShadowCount() {
 }
 
 void MeshConductor::nominateNode(const uint8_t* sta_mac) {
-    if (!s_role || !s_role->isGateway()) {
+    if (!s_role || s_role->roleId() != RoleId::GATEWAY) {
         SqLog.println("[mesh] nominateNode: not gateway, ignoring");
         return;
     }
@@ -1119,16 +1166,18 @@ void MeshConductor::nominateNode(const uint8_t* sta_mac) {
     // Small delay so the message reaches all peers before we transition
     vTaskDelay(pdMS_TO_TICKS(200));
 
-    // Update local gateway MAC and transition to NODE role
+    // Update local gateway MAC and reboot as PEER
     memcpy(s_gatewayMac, sta_mac, 6);
-    if (s_role) s_role->end();
-    s_role = &s_meshNode;
-    s_role->begin();
-    SqLog.println("[mesh] Stepped down to NODE");
+    rtc_state_t* rtc = RtcState::get();
+    rtc->next_role = (uint8_t)RoleId::PEER;
+    RtcState::save();
+    SqLog.println("[mesh] Stepped down — rebooting as PEER");
+    vTaskDelay(pdMS_TO_TICKS(200));
+    esp_restart();
 }
 
 void MeshConductor::stepDown() {
-    if (!s_role || !s_role->isGateway()) {
+    if (!s_role || s_role->roleId() != RoleId::GATEWAY) {
         Serial.println("Not gateway — cannot step down.");
         return;
     }

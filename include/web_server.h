@@ -24,7 +24,7 @@ public:
     static bool clearWifiCreds();
     static bool hasWifiCreds();
 
-    // DNS captive portal (public so SetupDelegate can reuse)
+    // DNS captive portal (public so Delegate can reuse)
     static void startDNS();
     static void stopDNS();
 

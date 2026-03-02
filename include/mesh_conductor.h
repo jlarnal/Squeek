@@ -29,6 +29,7 @@ enum MeshMsgType : uint8_t {
     MSG_TYPE_WIFI_CREDS_ACK  = 0x81,  // receiver → sender
     MSG_TYPE_MERGE_CHECK     = 0x82,  // delegate → broadcast: split-mesh healing
     MSG_TYPE_SETUP_DELEGATE  = 0x83,  // gateway → peer: designate as delegate
+    MSG_TYPE_DELEGATE_RESULT = 0x84,  // peer → gateway: delegation outcome
 };
 
 // --- Election score broadcast packet ---
@@ -167,6 +168,15 @@ struct __attribute__((packed)) SetupDelegateMsg {
     uint8_t gateway_mac[6];  // gateway MAC — last 2 bytes used for SSID discriminator
 };
 
+struct __attribute__((packed)) DelegateResultMsg {
+    uint8_t type;            // MSG_TYPE_DELEGATE_RESULT
+    uint8_t success;         // nonzero = creds obtained
+};
+
+// --- Role identifier ---
+
+enum class RoleId : uint8_t { PEER = 0, GATEWAY = 1, DELEGATE = 2 };
+
 // --- IMeshRole abstract interface ---
 
 class IMeshRole {
@@ -176,7 +186,7 @@ public:
     virtual void end() = 0;
     virtual void onPeerJoined(const uint8_t* mac) = 0;
     virtual void onPeerLeft(const uint8_t* mac) = 0;
-    virtual bool isGateway() const = 0;
+    virtual RoleId roleId() const = 0;
     virtual void printStatus() = 0;
 };
 
@@ -188,7 +198,7 @@ public:
     void end() override;
     void onPeerJoined(const uint8_t* mac) override;
     void onPeerLeft(const uint8_t* mac) override;
-    bool isGateway() const override { return true; }
+    RoleId roleId() const override { return RoleId::GATEWAY; }
     void printStatus() override;
 private:
     uint8_t m_peerCount = 0;
@@ -202,7 +212,7 @@ public:
     void end() override;
     void onPeerJoined(const uint8_t* mac) override;
     void onPeerLeft(const uint8_t* mac) override;
-    bool isGateway() const override { return false; }
+    RoleId roleId() const override { return RoleId::PEER; }
     void printStatus() override;
     void onGatewayLost();
 private:
@@ -219,6 +229,7 @@ public:
     static bool isConnected();
     static bool isGateway();
     static IMeshRole* role();
+    static void setRole(IMeshRole* role);
     static void printStatus();
 
     // Election

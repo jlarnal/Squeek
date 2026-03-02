@@ -4,10 +4,13 @@
 #include "nvs_config.h"
 #include "bsp.hpp"
 #include "sq_log.h"
+#include "rtc_state.h"
+#include "web_server.h"
 #include <Arduino.h>
 #include <esp_system.h>
 #include <esp_mac.h>
 #include <esp_wifi.h>
+#include <esp_mesh.h>
 #include <string.h>
 
 // Heartbeat timers
@@ -61,6 +64,72 @@ void MeshNode::begin() {
                                        pdFALSE, nullptr, heartbeatTimerCb);
     }
     xTimerStart(s_earlyHbTimer, 0);
+
+    // Check for unpushed creds from a previous delegate session
+    rtc_state_t* rtc = RtcState::get();
+    if (rtc->delegate_active) {
+        char ssid[33], pass[65];
+        if (SqWebServer::loadWifiCreds(ssid, sizeof(ssid), pass, sizeof(pass))) {
+            SqLog.println("[node] Unpushed creds detected — will push after mesh join");
+            xTaskCreate([](void*) {
+                for (int i = 0; i < 30; i++) {
+                    if (MeshConductor::isConnected()) break;
+                    vTaskDelay(pdMS_TO_TICKS(1000));
+                }
+                if (!MeshConductor::isConnected()) {
+                    SqLog.println("[node] Mesh not connected — skipping cred push");
+                    RtcState::get()->delegate_active = 0;
+                    RtcState::save();
+                    vTaskDelete(nullptr);
+                    return;
+                }
+
+                char ssid[33], pass[65];
+                if (SqWebServer::loadWifiCreds(ssid, sizeof(ssid), pass, sizeof(pass))) {
+                    WifiCredsMsg msg = {};
+                    msg.type = MSG_TYPE_WIFI_CREDS;
+                    strncpy(msg.ssid, ssid, 32);
+                    strncpy(msg.password, pass, 64);
+
+                    for (int i = 0; i < 10; i++) {
+                        SqLog.printf("[node] Pushing WiFi creds to gateway (attempt %d)\n", i + 1);
+                        MeshConductor::sendToRoot(&msg, sizeof(msg));
+                        vTaskDelay(pdMS_TO_TICKS(3000));
+                    }
+
+                    DelegateResultMsg dr = { .type = MSG_TYPE_DELEGATE_RESULT, .success = 1 };
+                    MeshConductor::sendToRoot(&dr, sizeof(dr));
+                }
+
+                RtcState::get()->delegate_active = 0;
+                RtcState::save();
+
+                mesh_addr_t rt[MESH_MAX_NODES];
+                int rtSize = 0;
+                esp_mesh_get_routing_table(rt, sizeof(rt), &rtSize);
+                MergeCheckMsg mc = { .type = MSG_TYPE_MERGE_CHECK, .root_table_size = (uint8_t)rtSize };
+                MeshConductor::broadcastToAll(&mc, sizeof(mc));
+                SqLog.println("[node] Merge check broadcast sent");
+
+                vTaskDelete(nullptr);
+            }, "credpush", 3072, nullptr, 2, nullptr);
+        } else {
+            SqLog.println("[node] Was delegate but no creds found — reporting failure");
+            xTaskCreate([](void*) {
+                for (int i = 0; i < 30; i++) {
+                    if (MeshConductor::isConnected()) break;
+                    vTaskDelay(pdMS_TO_TICKS(1000));
+                }
+                if (MeshConductor::isConnected()) {
+                    DelegateResultMsg dr = { .type = MSG_TYPE_DELEGATE_RESULT, .success = 0 };
+                    MeshConductor::sendToRoot(&dr, sizeof(dr));
+                }
+                RtcState::get()->delegate_active = 0;
+                RtcState::save();
+                vTaskDelete(nullptr);
+            }, "dlgfail", 2048, nullptr, 2, nullptr);
+        }
+    }
 }
 
 void MeshNode::end() {

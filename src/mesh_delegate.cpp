@@ -1,10 +1,10 @@
-#include "setup_delegate.h"
+#include "mesh_delegate.h"
 #include "web_server.h"
 #include "mesh_conductor.h"
-#include "storage_manager.h"
 #include "bsp.hpp"
 #include "sq_log.h"
 #include "rtc_state.h"
+#include "nvs_config.h"
 
 #include <ESPAsyncWebServer.h>
 #include <WiFi.h>
@@ -12,19 +12,19 @@
 #include <esp_netif.h>
 #include <esp_mesh.h>
 #include <esp_log.h>
+#include <esp_mac.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <freertos/timers.h>
 
 static const char* TAG = "delegate";
 
 // ---------------------------------------------------------------------------
 // File-scope state
 // ---------------------------------------------------------------------------
-static bool             s_active   = false;
 static AsyncWebServer*  s_server   = nullptr;
-static uint8_t          s_gwMac[6] = {};
-static TaskHandle_t     s_pushTask = nullptr;
-static volatile bool    s_pushStop = false;
+static TimerHandle_t    s_watchdog = nullptr;
+static Delegate*        s_delegateInstance = nullptr;
 
 // ---------------------------------------------------------------------------
 // Minimal WiFi wizard HTML — served inline (no LittleFS dependency)
@@ -59,7 +59,7 @@ document.getElementById('f').onsubmit=function(e){
   fetch('/api/wifi',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({ssid:document.getElementById('s').value,pass:document.getElementById('p').value})
   }).then(function(r){return r.json()}).then(function(d){
-    if(d.ok){msg.className='ok';msg.textContent='Connected! Rejoining mesh...';}
+    if(d.ok){msg.className='ok';msg.textContent='Connected! Rebooting...';}
     else{msg.className='err';msg.textContent='Failed: '+(d.error||'unknown');btn.disabled=false;}
   }).catch(function(){msg.className='err';msg.textContent='Network error';btn.disabled=false;});
 };
@@ -67,47 +67,29 @@ document.getElementById('f').onsubmit=function(e){
 )rawliteral";
 
 // ---------------------------------------------------------------------------
-// Credential push task — resends MSG_TYPE_WIFI_CREDS until ACK'd
+// Watchdog callback — reboots as peer if no creds received in time
 // ---------------------------------------------------------------------------
-static void credPushTask(void* /*param*/) {
-    char ssid[33], pass[65];
-    if (!SqWebServer::loadWifiCreds(ssid, sizeof(ssid), pass, sizeof(pass))) {
-        SqLog.println("[delegate] No creds to push");
-        vTaskDelete(nullptr);
-        return;
-    }
-
-    WifiCredsMsg msg = {};
-    msg.type = MSG_TYPE_WIFI_CREDS;
-    strncpy(msg.ssid, ssid, 32);
-    strncpy(msg.password, pass, 64);
-
-    for (int i = 0; i < 10 && !s_pushStop; i++) {
-        SqLog.printf("[delegate] Pushing WiFi creds to mesh (attempt %d)\n", i + 1);
-        MeshConductor::sendToRoot(&msg, sizeof(msg));
-        vTaskDelay(pdMS_TO_TICKS(3000));
-    }
-
-    // Also broadcast merge check
-    mesh_addr_t rt[MESH_MAX_NODES];
-    int rtSize = 0;
-    esp_mesh_get_routing_table(rt, sizeof(rt), &rtSize);
-    MergeCheckMsg mc = { .type = MSG_TYPE_MERGE_CHECK, .root_table_size = (uint8_t)rtSize };
-    MeshConductor::broadcastToAll(&mc, sizeof(mc));
-    SqLog.println("[delegate] Merge check broadcast sent");
-
-    s_pushTask = nullptr;
-    vTaskDelete(nullptr);
+static void watchdogCb(TimerHandle_t t) {
+    (void)t;
+    ESP_LOGW(TAG, "Delegate timeout (%ds) — no creds received, rebooting as peer", (uint16_t)NvsConfigManager::delegateTimeout_s);
+    rtc_state_t* rtc = RtcState::get();
+    rtc->next_role = (uint8_t)RoleId::PEER;
+    rtc->delegate_active = 0;
+    RtcState::save();
+    esp_restart();
 }
 
 // ---------------------------------------------------------------------------
-// SoftAP management
+// SoftAP management (file-scope, uses own MAC for SSID)
 // ---------------------------------------------------------------------------
-void SetupDelegate::startSoftAP(const uint8_t gatewayMac[6]) {
+static void startSoftAP() {
+    // Get own MAC for SSID suffix
+    uint8_t mac[6];
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+
     // Build SSID: Squeek_Config_XXYY
     char ssid[32];
-    snprintf(ssid, sizeof(ssid), "Squeek_Config_%02X%02X",
-             gatewayMac[4], gatewayMac[5]);
+    snprintf(ssid, sizeof(ssid), "Squeek_Config_%02X%02X", mac[4], mac[5]);
 
     // Stop mesh and WiFi completely so we can swap netifs before restarting.
     esp_mesh_stop();
@@ -115,8 +97,7 @@ void SetupDelegate::startSoftAP(const uint8_t gatewayMac[6]) {
     esp_wifi_stop();
 
     // Mesh netifs have DHCP_SERVER stripped — destroy and replace with a standard
-    // AP netif that has DHCP built in. Must happen while WiFi is stopped so the
-    // driver binds to the new netif on esp_wifi_start().
+    // AP netif that has DHCP built in.
     esp_netif_t* nif;
     if ((nif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF")))  esp_netif_destroy(nif);
     if ((nif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF"))) esp_netif_destroy(nif);
@@ -135,8 +116,6 @@ void SetupDelegate::startSoftAP(const uint8_t gatewayMac[6]) {
     esp_wifi_start();
 
     if (ap_netif) {
-        // Set our preferred IP (standard AP netif defaults to 192.168.4.1 anyway,
-        // but be explicit). DHCP server is auto-started by the event handler.
         esp_netif_dhcps_stop(ap_netif);
         esp_netif_ip_info_t ip_info = {};
         IP4_ADDR(&ip_info.ip,      192, 168, 4, 1);
@@ -153,29 +132,16 @@ void SetupDelegate::startSoftAP(const uint8_t gatewayMac[6]) {
     }
 }
 
-void SetupDelegate::stopSoftAP() {
-    WiFi.softAPdisconnect(true);
-    WiFi.mode(WIFI_OFF);
-    vTaskDelay(pdMS_TO_TICKS(200));
-
-    // Destroy standard AP/STA netifs, restore mesh netifs for rejoin
-    esp_netif_t* nif;
-    if ((nif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF")))  esp_netif_destroy(nif);
-    if ((nif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF"))) esp_netif_destroy(nif);
-    esp_netif_create_default_wifi_mesh_netifs(NULL, NULL);
-    ESP_LOGI(TAG, "Restored mesh netifs for rejoin");
-}
-
 // ---------------------------------------------------------------------------
 // WiFi wizard routes
 // ---------------------------------------------------------------------------
-void SetupDelegate::registerWizardRoutes() {
+static void registerWizardRoutes() {
     // Serve wizard page
     s_server->on("/", HTTP_GET, [](AsyncWebServerRequest* req) {
         req->send(200, "text/html", WIZARD_HTML);
     });
 
-    // Captive portal catch-all → redirect to wizard
+    // Captive portal catch-all redirects
     s_server->on("/generate_204", HTTP_GET, [](AsyncWebServerRequest* req) {
         req->redirect("/");
     });
@@ -189,26 +155,18 @@ void SetupDelegate::registerWizardRoutes() {
         nullptr,
         [](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t index, size_t total) {
             if (index + len > 256) { req->send(400, "application/json", "{\"ok\":false,\"error\":\"too large\"}"); return; }
-            // Only process when all data received
             if (index + len < total) return;
 
-            // Parse JSON
             char buf[257];
             size_t cpLen = (total < 256) ? total : 256;
             memcpy(buf, data, cpLen);
             buf[cpLen] = '\0';
 
-            // Simple JSON extraction (avoid ArduinoJson dependency here)
-            // Use ArduinoJson since it's already a project dependency
-            // But we need to handle this in the body callback which accumulates data
-            // For simplicity, parse the full body
             String body = String(buf);
-            // Quick parse: find "ssid":"..." and "pass":"..."
             int si = body.indexOf("\"ssid\"");
             int pi = body.indexOf("\"pass\"");
             if (si < 0) { req->send(400, "application/json", "{\"ok\":false,\"error\":\"missing ssid\"}"); return; }
 
-            // Extract values between quotes after the colon
             auto extractVal = [](const String& s, int keyPos) -> String {
                 int colon = s.indexOf(':', keyPos);
                 if (colon < 0) return "";
@@ -227,7 +185,7 @@ void SetupDelegate::registerWizardRoutes() {
                 return;
             }
 
-            bool ok = SetupDelegate::onCredsSubmitted(ssid.c_str(), pass.c_str());
+            bool ok = s_delegateInstance && s_delegateInstance->onCredsSubmitted(ssid.c_str(), pass.c_str());
             if (ok) {
                 req->send(200, "application/json", "{\"ok\":true}");
             } else {
@@ -243,64 +201,74 @@ void SetupDelegate::registerWizardRoutes() {
 }
 
 // ---------------------------------------------------------------------------
-// Public API
+// Delegate IMeshRole implementation
 // ---------------------------------------------------------------------------
-void SetupDelegate::begin(const uint8_t gatewayMac[6]) {
-    if (s_active) return;
 
-    memcpy(s_gwMac, gatewayMac, 6);
-    ESP_LOGI(TAG, "Entering Setup Delegate mode");
+void Delegate::begin() {
+    s_delegateInstance = this;
 
-    startSoftAP(gatewayMac);
+    // Mark RTC state
+    rtc_state_t* rtc = RtcState::get();
+    rtc->delegate_active = 1;
+    rtc->own_role = (uint8_t)RoleId::DELEGATE;
+    RtcState::save();
+
+    ESP_LOGI(TAG, "Entering Delegate role");
+
+    // Start SoftAP
+    startSoftAP();
 
     // Start web server with wizard
     s_server = new AsyncWebServer(80);
     registerWizardRoutes();
     s_server->begin();
 
-    // Start DNS captive portal (reuse SqWebServer's DNS)
+    // Start DNS captive portal
     SqWebServer::startDNS();
 
-    s_active = true;
-    RtcState::get()->delegate_active = 1;
-    RtcState::save();
-    ESP_LOGI(TAG, "Setup Delegate active — waiting for WiFi credentials");
+    // Start watchdog timer (clamp 60-600s)
+    uint16_t tmo = NvsConfigManager::delegateTimeout_s;
+    if (tmo < 60)  tmo = 60;
+    if (tmo > 600) tmo = 600;
+
+    s_watchdog = xTimerCreate("dlg_wd", pdMS_TO_TICKS((uint32_t)tmo * 1000),
+                              pdFALSE, nullptr, watchdogCb);
+    if (s_watchdog) {
+        xTimerStart(s_watchdog, 0);
+        ESP_LOGI(TAG, "Watchdog armed: %u s", tmo);
+    }
+
+    ESP_LOGI(TAG, "Delegate active — waiting for WiFi credentials");
 }
 
-void SetupDelegate::end() {
-    if (!s_active) return;
+void Delegate::end() {
+    s_delegateInstance = nullptr;
 
-    ESP_LOGI(TAG, "Leaving Setup Delegate mode");
+    // Stop + delete watchdog
+    if (s_watchdog) {
+        xTimerStop(s_watchdog, 0);
+        xTimerDelete(s_watchdog, 0);
+        s_watchdog = nullptr;
+    }
 
+    // Stop DNS
     SqWebServer::stopDNS();
 
+    // Tear down web server
     if (s_server) {
         s_server->end();
         delete s_server;
         s_server = nullptr;
     }
 
-    stopSoftAP();
+    // Tear down SoftAP
+    WiFi.softAPdisconnect(true);
+    WiFi.mode(WIFI_OFF);
 
-    // Rejoin mesh (mesh was stopped but not deinited, so just restart)
-    ESP_LOGI(TAG, "Rejoining mesh...");
-    MeshConductor::start();
-
-    // Start credential push task
-    s_pushStop = false;
-    xTaskCreate(credPushTask, "credpush", 3072, nullptr, 2, &s_pushTask);
-
-    s_active = false;
-    RtcState::get()->delegate_active = 0;
-    RtcState::save();
-    ESP_LOGI(TAG, "Setup Delegate ended, mesh rejoin initiated");
+    ESP_LOGI(TAG, "Delegate role ended");
 }
 
-bool SetupDelegate::isActive() {
-    return s_active;
-}
-
-bool SetupDelegate::onCredsSubmitted(const char* ssid, const char* pass) {
+bool Delegate::onCredsSubmitted(const char* ssid, const char* pass) {
     ESP_LOGI(TAG, "Attempting connection to router: %s", ssid);
 
     // Temporarily switch to STA+AP to test the connection
@@ -316,18 +284,20 @@ bool SetupDelegate::onCredsSubmitted(const char* ssid, const char* pass) {
 
     if (WiFi.status() == WL_CONNECTED) {
         ESP_LOGI(TAG, "Router connection successful (IP=%s)", WiFi.localIP().toString().c_str());
-        WiFi.disconnect(true);  // disconnect — we'll reconnect via mesh router config
+        WiFi.disconnect(true);
 
         // Save credentials to NVS
         SqWebServer::saveWifiCreds(ssid, pass);
 
-        // Schedule mesh rejoin (can't call end() from HTTP handler context)
-        // Use a short timer to call end() after response is sent
+        // Spawn deferred reboot task (2s delay to let HTTP response flush)
         xTaskCreate([](void*) {
-            vTaskDelay(pdMS_TO_TICKS(2000));  // let HTTP response flush
-            SetupDelegate::end();
-            vTaskDelete(nullptr);
-        }, "dlg_end", 2048, nullptr, 2, nullptr);
+            vTaskDelay(pdMS_TO_TICKS(2000));
+            rtc_state_t* rtc = RtcState::get();
+            rtc->next_role = (uint8_t)RoleId::PEER;
+            rtc->delegate_active = 1;  // signal peer to push creds
+            RtcState::save();
+            esp_restart();
+        }, "dlg_reboot", 2048, nullptr, 2, nullptr);
 
         return true;
     }
@@ -336,4 +306,23 @@ bool SetupDelegate::onCredsSubmitted(const char* ssid, const char* pass) {
     WiFi.disconnect(true);
     WiFi.mode(WIFI_AP);  // back to AP-only
     return false;
+}
+
+void Delegate::onPeerJoined(const uint8_t* mac) {
+    (void)mac;  // no mesh active in delegate mode
+}
+
+void Delegate::onPeerLeft(const uint8_t* mac) {
+    (void)mac;  // no mesh active in delegate mode
+}
+
+void Delegate::printStatus() {
+    Serial.printf("  Role: DELEGATE\n");
+    if (s_watchdog) {
+        TickType_t remaining = xTimerGetExpiryTime(s_watchdog) - xTaskGetTickCount();
+        Serial.printf("  Watchdog: %lu s remaining\n",
+                      (unsigned long)(remaining / configTICK_RATE_HZ));
+    } else {
+        Serial.printf("  Watchdog: inactive\n");
+    }
 }

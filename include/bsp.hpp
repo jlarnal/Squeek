@@ -115,6 +115,9 @@ constexpr gpio_num_t PIEZO_PIN_B = GPIO_NUM_23;  // push-pull complement
 // Fast-path boot
 #define NVS_DEFAULT_FAST_SCAN  5        // reduced scan wait (seconds) on fast-boot
 
+// Delegate timeout
+#define NVS_DEFAULT_DELEGATE_TMO   240     // delegate watchdog timeout (seconds)
+
 // BOOT button — GPIO9 on ESP32-C6 (boot strapping pin, not GPIO0 like classic ESP32)
 #define BOOT_BUTTON_PIN        GPIO_NUM_9
 #define BOOT_BUTTON_DEBOUNCE_MS 50

@@ -10,7 +10,7 @@
 #include "orchestrator.h"
 #include "clock_sync.h"
 #include "web_server.h"
-#include "setup_delegate.h"
+#include "mesh_delegate.h"
 #include "rtc_state.h"
 #include <Arduino.h>
 #include <esp_wifi.h>
@@ -53,20 +53,50 @@ void Gateway::begin() {
     if (SqWebServer::hasWifiCreds()) {
         SqWebServer::start();
     } else {
-        // No WiFi creds — enter Setup Delegate mode
-        // Lone gateway (0 peers) handles it itself
+        // No WiFi creds — need Setup Delegate mode
+        // Lone gateway (0 peers) reboots itself as delegate
         if (m_peerCount == 0) {
-            uint8_t ownMac[6];
-            esp_read_mac(ownMac, ESP_MAC_WIFI_STA);
-            SqLog.println("[gateway] No WiFi creds, self-delegating for setup");
-            SetupDelegate::begin(ownMac);
+            SqLog.println("[gateway] No WiFi creds, rebooting as delegate for setup");
+            rtc_state_t* rtc = RtcState::get();
+            rtc->next_role = (uint8_t)RoleId::DELEGATE;
+            RtcState::save();
+            vTaskDelay(pdMS_TO_TICKS(200));
+            esp_restart();
         } else {
-            // TODO: designate a peer as Setup Delegate (send MSG_TYPE_SETUP_DELEGATE)
-            // For now, self-delegate even with peers
-            uint8_t ownMac[6];
-            esp_read_mac(ownMac, ESP_MAC_WIFI_STA);
-            SqLog.println("[gateway] No WiFi creds, self-delegating for setup (has peers)");
-            SetupDelegate::begin(ownMac);
+            // Has peers — pick best alive peer and designate as delegate
+            uint8_t bestIdx = 0;
+            uint16_t bestBat = 0;
+            uint8_t count = PeerTable::peerCount();
+            for (uint8_t i = 1; i < count; i++) {
+                PeerEntry* e = PeerTable::getEntryByIndex(i);
+                if (!e || (e->flags & PEER_STATUS_DEAD)) continue;
+                if (e->battery_mv > bestBat) {
+                    bestBat = e->battery_mv;
+                    bestIdx = i;
+                }
+            }
+
+            if (bestIdx > 0) {
+                PeerEntry* delegate = PeerTable::getEntryByIndex(bestIdx);
+                SqLog.printf("[gateway] Designating peer %02X:%02X:%02X:%02X:%02X:%02X as delegate\n",
+                    delegate->mac[0], delegate->mac[1], delegate->mac[2],
+                    delegate->mac[3], delegate->mac[4], delegate->mac[5]);
+
+                uint8_t ownMac[6];
+                esp_read_mac(ownMac, ESP_MAC_WIFI_STA);
+                SetupDelegateMsg msg = {};
+                msg.type = MSG_TYPE_SETUP_DELEGATE;
+                memcpy(msg.gateway_mac, ownMac, 6);
+                MeshConductor::sendToNode(delegate->mac, &msg, sizeof(msg));
+            } else {
+                // No alive peers — self-delegate
+                SqLog.println("[gateway] No alive peers, rebooting as delegate for setup");
+                rtc_state_t* rtc = RtcState::get();
+                rtc->next_role = (uint8_t)RoleId::DELEGATE;
+                RtcState::save();
+                vTaskDelay(pdMS_TO_TICKS(200));
+                esp_restart();
+            }
         }
     }
 }

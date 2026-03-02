@@ -18,6 +18,7 @@ void RtcState::init() {
         esp_read_mac(s_state.own_mac, ESP_MAC_WIFI_STA);
         s_state.magic = RTC_STATE_MAGIC;
         s_state.mesh_channel = MESH_CHANNEL;
+        s_state.next_role = 0xFF;
         save();
     }
 }
@@ -45,15 +46,19 @@ void RtcState::print() {
     Serial.printf("Own MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
         s_state.own_mac[0], s_state.own_mac[1], s_state.own_mac[2],
         s_state.own_mac[3], s_state.own_mac[4], s_state.own_mac[5]);
-    Serial.printf("Short ID: %u  Role: %s\n",
-        s_state.own_short_id,
-        s_state.own_role == 1 ? "gateway" : "peer");
+    const char* roleStr = s_state.own_role == 2 ? "delegate"
+                        : s_state.own_role == 1 ? "gateway" : "peer";
+    Serial.printf("Short ID: %u  Role: %s\n", s_state.own_short_id, roleStr);
     Serial.printf("Gateway MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
         s_state.gateway_mac[0], s_state.gateway_mac[1], s_state.gateway_mac[2],
         s_state.gateway_mac[3], s_state.gateway_mac[4], s_state.gateway_mac[5]);
     Serial.printf("Channel: %u  Peers: %u  Generation: %lu\n",
         s_state.mesh_channel, s_state.peer_count, s_state.mesh_generation);
     Serial.printf("Delegate active: %s\n", s_state.delegate_active ? "yes" : "no");
+    Serial.printf("Next role: 0x%02X (%s)\n", s_state.next_role,
+        s_state.next_role == 0 ? "peer" :
+        s_state.next_role == 1 ? "gateway" :
+        s_state.next_role == 2 ? "delegate" : "election");
 
     for (uint8_t i = 0; i < s_state.peer_count && i < MESH_MAX_NODES; i++) {
         const rtc_peer_entry_t& p = s_state.peers[i];

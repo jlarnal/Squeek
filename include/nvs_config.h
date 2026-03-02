@@ -47,6 +47,9 @@ inline constexpr char NVS_KEY_WEB_EN[]    = "webEn";
 // Fast-path boot
 inline constexpr char NVS_KEY_FAST_SCAN[] = "fastScn";
 
+// Delegate
+inline constexpr char NVS_KEY_DLG_TMO[] = "dlgTmo";
+
 // --- Default values (sourced from BSP defines for single-point maintenance) ---
 
 inline constexpr bool     DEFAULT_LEDS_ENABLED       = NVS_DEFAULT_LEDS_ENABLED;
@@ -80,6 +83,9 @@ inline constexpr bool     DEFAULT_WEB_ENABLED         = NVS_DEFAULT_WEB_ENABLED;
 
 // Fast-path boot
 inline constexpr uint16_t DEFAULT_FAST_SCAN           = NVS_DEFAULT_FAST_SCAN;
+
+// Delegate
+inline constexpr uint16_t DEFAULT_DELEGATE_TMO          = NVS_DEFAULT_DELEGATE_TMO;
 
 // Phase 2: FTM defaults
 inline constexpr uint32_t DEFAULT_FTM_STALE_S        = NVS_DEFAULT_FTM_STALE_S;
@@ -160,6 +166,8 @@ namespace nvs_detail {
         h = fnvBool(h, DEFAULT_WEB_ENABLED);
         // Fast-path boot
         h = fnvU32(h, (uint32_t)DEFAULT_FAST_SCAN);
+        // Delegate
+        h = fnvU32(h, (uint32_t)DEFAULT_DELEGATE_TMO);
         return h;
     }
 }
@@ -229,6 +237,9 @@ public:
 
     // Fast-path boot
     static PropertyValue<NVS_KEY_FAST_SCAN, uint16_t, NvsConfigManager> fastScanDelay_s;
+
+    // Delegate timeout
+    static PropertyValue<NVS_KEY_DLG_TMO, uint16_t, NvsConfigManager> delegateTimeout_s;
 };
 
 #endif // NVS_CONFIG_H
