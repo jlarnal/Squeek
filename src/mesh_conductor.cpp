@@ -770,6 +770,11 @@ static void meshEventHandler(void* arg, esp_event_base_t event_base,
         s_parentRetries = 0;
         if (esp_mesh_is_root()) {
             SqLog.println("[mesh] I am ROOT");
+            // Root is connected to the router — start DHCP to get a STA IP
+            esp_netif_t* sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+            if (sta) {
+                esp_netif_dhcpc_start(sta);
+            }
         }
         updateRtcState();
 
@@ -965,7 +970,10 @@ void MeshConductor::start() {
             memcpy(cfg.router.ssid, ssid, strlen(ssid));
             cfg.router.ssid_len = strlen(ssid);
             memcpy(cfg.router.password, pass, strlen(pass));
-            SqLog.printf("[mesh] Router config set: SSID=%s\n", ssid);
+
+            // Channel 0 = scan all channels to find the router automatically
+            cfg.channel = 0;
+            SqLog.printf("[mesh] Router config set: SSID=%s (auto-channel)\n", ssid);
         }
     }
 

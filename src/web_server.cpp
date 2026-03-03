@@ -10,6 +10,7 @@
 #include <freertos/task.h>
 #include <lwip/sockets.h>
 #include <esp_netif.h>
+#include <esp_event.h>
 #include <esp_mesh.h>
 #include <nvs_flash.h>
 #include <mdns.h>
@@ -60,6 +61,7 @@ bool SqWebServer::hasWifiCreds() {
     char pass[65];
     return loadWifiCreds(ssid, sizeof(ssid), pass, sizeof(pass));
 }
+
 
 // ---- file-scope state -----------------------------------------------------
 static AsyncWebServer* s_server  = nullptr;
@@ -264,6 +266,31 @@ void SqWebServer::stopDNS() {
 }
 
 // ---------------------------------------------------------------------------
+// IP event — start mDNS + NTP when the root gets a STA IP from the router
+// ---------------------------------------------------------------------------
+static void onStaGotIp(void* arg, esp_event_base_t event_base,
+                        int32_t event_id, void* event_data) {
+    ip_event_got_ip_t* event = (ip_event_got_ip_t*)event_data;
+    ESP_LOGI(TAG, "Got router IP: " IPSTR, IP2STR(&event->ip_info.ip));
+
+    if (s_staMode) return;  // already initialized
+
+    // mDNS
+    if (mdns_init() == ESP_OK) {
+        mdns_hostname_set("squeek");
+        mdns_instance_name_set("Squeek Mesh Controller");
+        mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
+        ESP_LOGI(TAG, "mDNS started: squeek.local");
+    }
+    // NTP
+    esp_sntp_setoperatingmode(ESP_SNTP_OPMODE_POLL);
+    esp_sntp_setservername(0, "pool.ntp.org");
+    esp_sntp_init();
+    ESP_LOGI(TAG, "NTP sync started");
+    s_staMode = true;
+}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 void SqWebServer::start() {
@@ -288,37 +315,35 @@ void SqWebServer::start() {
 
     registerRoutes();
     s_server->begin();
-    startDNS();
+
+    // DNS captive portal is NOT started here — it belongs to Delegate only.
 
     s_running = true;
 
-    // If mesh root has a router connection, start mDNS + NTP
-    esp_netif_ip_info_t sta_info = {};
-    esp_netif_t* sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
-    if (sta && esp_netif_get_ip_info(sta, &sta_info) == ESP_OK && sta_info.ip.addr != 0) {
-        // mDNS
-        if (mdns_init() == ESP_OK) {
-            mdns_hostname_set("squeek");
-            mdns_instance_name_set("Squeek Mesh Controller");
-            mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
-            ESP_LOGI(TAG, "mDNS started: squeek.local");
-        }
-        // NTP
-        esp_sntp_setoperatingmode(ESP_SNTP_OPMODE_POLL);
-        esp_sntp_setservername(0, "pool.ntp.org");
-        esp_sntp_init();
-        ESP_LOGI(TAG, "NTP sync started");
-        s_staMode = true;
-    }
+    // mDNS + NTP start when we get a STA IP from the router (async via IP event)
+    esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &onStaGotIp, NULL);
 
-    uint32_t addr = getApIpAddr();
-    ESP_LOGI(TAG, "Web server started — http://%u.%u.%u.%u/",
-             (addr >> 0) & 0xFF, (addr >> 8) & 0xFF,
-             (addr >> 16) & 0xFF, (addr >> 24) & 0xFF);
+    // Log the best reachable address
+    esp_netif_ip_info_t log_ip = {};
+    esp_netif_t* log_sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (log_sta && esp_netif_get_ip_info(log_sta, &log_ip) == ESP_OK && log_ip.ip.addr != 0) {
+        ESP_LOGI(TAG, "Web server started — http://" IPSTR "/", IP2STR(&log_ip.ip));
+    } else {
+        uint32_t addr = getApIpAddr();
+        if (addr) {
+            ESP_LOGI(TAG, "Web server started — http://%u.%u.%u.%u/ (AP, waiting for router DHCP)",
+                     (addr >> 0) & 0xFF, (addr >> 8) & 0xFF,
+                     (addr >> 16) & 0xFF, (addr >> 24) & 0xFF);
+        } else {
+            ESP_LOGI(TAG, "Web server started (no IP yet)");
+        }
+    }
 }
 
 void SqWebServer::stop() {
     if (!s_running) return;
+
+    esp_event_handler_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP, &onStaGotIp);
 
     if (s_staMode) {
         mdns_service_remove_all();
@@ -328,7 +353,7 @@ void SqWebServer::stop() {
         ESP_LOGI(TAG, "mDNS + NTP stopped");
     }
 
-    stopDNS();
+    stopDNS();  // no-op if DNS wasn't started (Delegate manages its own)
 
     if (s_ws) {
         s_ws->closeAll();

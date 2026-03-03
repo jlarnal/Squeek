@@ -1,0 +1,187 @@
+<!DOCTYPE html><html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Squeek Setup</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:system-ui,-apple-system,sans-serif;background:linear-gradient(180deg,#0d0d1a 0%,#1a1a2e 100%);
+color:#e0e0e0;min-height:100vh;display:flex;justify-content:center;align-items:flex-start;padding:2em 1em}
+.wrap{width:100%;max-width:420px}
+h1{color:#00d4ff;font-size:1.6em;margin-bottom:.2em;text-align:center}
+.sub{text-align:center;color:#888;font-size:.85em;margin-bottom:1.5em}
+.brand{text-align:center;margin-bottom:.6em;font-size:2em;filter:drop-shadow(0 0 8px rgba(0,212,255,.4))}
+label{display:block;font-size:.85em;color:#aaa;margin-bottom:.3em}
+select,input[type=text],input[type=password],input[type=text].pw{width:100%;padding:12px;border-radius:8px;border:1px solid #333;
+background:#0d0d1a;color:#e0e0e0;font-size:1em;outline:none;transition:border-color .2s;-webkit-appearance:none;appearance:none}
+.pw-wrap{position:relative}
+.pw-wrap input{padding-right:44px}
+.eyeBtn{position:absolute;right:4px;top:50%;transform:translateY(-50%);width:36px;height:36px;border:none;
+background:transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;
+border-radius:6px;padding:0}
+.eyeBtn svg{width:22px;height:22px;opacity:.6;transition:opacity .2s}
+.eyeBtn:active svg{opacity:1}
+select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%23888' stroke-width='2' fill='none'/%3E%3C/svg%3E");
+background-repeat:no-repeat;background-position:right 12px center;padding-right:36px}
+select:focus,input:focus{border-color:#00d4ff}
+.field{margin-bottom:1em}
+#manualWrap{display:none;margin-top:.5em}
+button{width:100%;padding:14px;border:none;border-radius:8px;background:#00d4ff;color:#0d0d1a;
+font-size:1em;font-weight:600;cursor:pointer;transition:opacity .2s;min-height:44px}
+button:disabled{opacity:.4;cursor:default}
+button:active:not(:disabled){opacity:.8}
+#msg{margin-top:1em;padding:10px 12px;border-radius:8px;font-size:.9em;display:none}
+.ok{background:#1b3a2a;border:1px solid #2d6a3e;display:block}
+.err{background:#3a1b1b;border:1px solid #6a2d2d;display:block}
+.wait{background:#3a3a1b;border:1px solid #6a6a2d;display:block}
+.langBtn{position:fixed;top:12px;right:12px;width:40px;height:40px;border-radius:50%;border:1px solid #333;
+background:#0d0d1a;font-size:1.2em;cursor:pointer;display:flex;align-items:center;justify-content:center;
+z-index:10;transition:border-color .2s}
+.langBtn:active{border-color:#00d4ff}
+.signal{display:inline-flex;align-items:flex-end;gap:2px;height:16px;vertical-align:middle;margin-left:6px}
+.signal .bar{width:4px;border-radius:1px;background:#333}
+.signal .bar.on{background:#00d4ff}
+.signal .bar:nth-child(1){height:4px}
+.signal .bar:nth-child(2){height:7px}
+.signal .bar:nth-child(3){height:11px}
+.signal .bar:nth-child(4){height:16px}
+.lock{margin-left:4px;font-size:.75em;opacity:.6}
+.scan-info{text-align:center;color:#666;font-size:.8em;margin-bottom:1em}
+</style></head><body>
+<button class="langBtn" id="langBtn" title="Language"></button>
+<div class="wrap">
+<div class="brand">&#x1F43E;</div>
+<h1 data-i18n="title">Squeek Setup</h1>
+<p class="sub" data-i18n="desc">Connect this device to your WiFi</p>
+<form id="f">
+<div class="field">
+<label data-i18n="network">Network</label>
+<select id="sel"><option value="" data-i18n="scanning">Scanning...</option></select>
+<div id="manualWrap"><input type="text" id="manualSsid" placeholder="SSID" maxlength="32"></div>
+</div>
+<div class="field">
+<label data-i18n="password">Password</label>
+<div class="pw-wrap"><input type="password" id="p" autocomplete="off"><button type="button" class="eyeBtn" id="eyeBtn"><svg id="eyeClosed" viewBox="0 0 141 95" xmlns="http://www.w3.org/2000/svg"><g transform="translate(3.59,3.59)"><path d="m14.38,19.3c15.18,45.66 85.72,44.75 101.15,0" style="fill:none;stroke:#e8e8e8;stroke-width:7.9;stroke-linecap:round;stroke-linejoin:round"/><path d="M30.24,42.48 19.8,59.04" style="fill:none;stroke:#e8e8e8;stroke-width:7.9;stroke-linecap:round"/><path d="M99,42.48 109.44,59.04" style="fill:none;stroke:#e8e8e8;stroke-width:7.9;stroke-linecap:round"/><path d="m77.23,51.99 4.3,19.1" style="fill:none;stroke:#e8e8e8;stroke-width:7.9;stroke-linecap:round"/><path d="M52.37,51.99 48.07,71.09" style="fill:none;stroke:#e8e8e8;stroke-width:7.9;stroke-linecap:round"/></g></svg><svg id="eyeOpen" style="display:none" viewBox="0 0 141 95" xmlns="http://www.w3.org/2000/svg"><g transform="translate(3.59,3.59)"><path d="m14.38,44.48c15.68,38.16 86.18,37.85 101.15,0" style="fill:none;stroke:#e8e8e8;stroke-width:7.9;stroke-linecap:round;stroke-linejoin:round"/><path d="m14.38,44.54c15.68,-38.16 86.18,-37.85 101.15,0" style="fill:none;stroke:#e8e8e8;stroke-width:7.9;stroke-linecap:round;stroke-linejoin:round"/><path d="M79.57,45.37C80.67,59.16 58.67,65.23 52.82,52.46 46.23,40.9 59.52,25.67 71.71,32.65" style="fill:none;stroke:#e8e8e8;stroke-width:7.9;stroke-linecap:round;stroke-linejoin:round"/></g></svg></button></div>
+</div>
+<button type="submit" id="btn" data-i18n="connect">Connect</button>
+</form>
+<div id="msg"></div>
+</div>
+<script>
+var L={
+en:{title:"Squeek Setup",desc:"Connect this device to your WiFi",network:"Network",password:"Password",
+connect:"Connect",scanning:"Scanning\u2026",other:"Other (manual entry)",noNetworks:"No networks found",
+connecting:"Connecting\u2026",success:"Connected! Rebooting\u2026",fail:"Failed: ",netErr:"Network error",open:"Open"},
+fr:{title:"Config Squeek",desc:"Connectez cet appareil \u00e0 votre WiFi",network:"R\u00e9seau",password:"Mot de passe",
+connect:"Connexion",scanning:"Recherche\u2026",other:"Autre (saisie manuelle)",noNetworks:"Aucun r\u00e9seau",
+connecting:"Connexion\u2026",success:"Connect\u00e9 ! Red\u00e9marrage\u2026",fail:"\u00c9chec : ",netErr:"Erreur r\u00e9seau",open:"Ouvert"},
+es:{title:"Config Squeek",desc:"Conecta este dispositivo a tu WiFi",network:"Red",password:"Contrase\u00f1a",
+connect:"Conectar",scanning:"Buscando\u2026",other:"Otra (entrada manual)",noNetworks:"Sin redes",
+connecting:"Conectando\u2026",success:"\u00a1Conectado! Reiniciando\u2026",fail:"Error: ",netErr:"Error de red",open:"Abierta"},
+de:{title:"Squeek Einrichtung",desc:"Verbinde dieses Ger\u00e4t mit deinem WLAN",network:"Netzwerk",password:"Passwort",
+connect:"Verbinden",scanning:"Suche\u2026",other:"Andere (manuelle Eingabe)",noNetworks:"Keine Netzwerke",
+connecting:"Verbindung\u2026",success:"Verbunden! Neustart\u2026",fail:"Fehler: ",netErr:"Netzwerkfehler",open:"Offen"}
+};
+var langs=["en","fr","es","de"];
+var flags=["\uD83C\uDDEC\uD83C\uDDE7","\uD83C\uDDEB\uD83C\uDDF7","\uD83C\uDDEA\uD83C\uDDF8","\uD83C\uDDE9\uD83C\uDDEA"];
+var lang=localStorage.getItem("lang")||navigator.language.slice(0,2);
+if(langs.indexOf(lang)<0)lang="en";
+var scanData=[];
+
+function t(k){return(L[lang]&&L[lang][k])||L.en[k]||k}
+
+function applyLang(){
+document.querySelectorAll("[data-i18n]").forEach(function(el){
+var k=el.getAttribute("data-i18n");
+if(el.tagName==="OPTION")el.textContent=t(k);
+else if(el.tagName==="INPUT")el.placeholder=t(k);
+else el.textContent=t(k);
+});
+var idx=langs.indexOf(lang);
+document.getElementById("langBtn").textContent=flags[idx>=0?idx:0];
+if(scanData.length)populateSelect();
+}
+
+function signalBars(rssi){
+var s=rssi>-50?4:rssi>-65?3:rssi>-75?2:1;
+var h='<span class="signal">';
+for(var i=1;i<=4;i++)h+='<span class="bar'+(i<=s?' on':'')+'"></span>';
+return h+'</span>';
+}
+
+function populateSelect(){
+var sel=document.getElementById("sel");
+sel.innerHTML="";
+if(!scanData.length){
+var o=document.createElement("option");o.value="";o.textContent=t("noNetworks");o.setAttribute("data-i18n","noNetworks");
+sel.appendChild(o);
+}else{
+scanData.forEach(function(n){
+var o=document.createElement("option");o.value=n.ssid;
+o.innerHTML=n.ssid+(n.auth>0?'<span class="lock">\uD83D\uDD12</span>':'')+signalBars(n.rssi);
+o.textContent=n.ssid+(n.auth>0?" \uD83D\uDD12":"")+(n.rssi>-50?" ||||":n.rssi>-65?" |||":n.rssi>-75?" ||":" |");
+sel.appendChild(o);
+});
+}
+var oo=document.createElement("option");oo.value="__other__";oo.textContent=t("other");oo.setAttribute("data-i18n","other");
+sel.appendChild(oo);
+}
+
+document.getElementById("sel").addEventListener("change",function(){
+var mw=document.getElementById("manualWrap");
+mw.style.display=this.value==="__other__"?"block":"none";
+if(this.value==="__other__")document.getElementById("manualSsid").focus();
+});
+
+document.getElementById("eyeBtn").addEventListener("click",function(){
+var p=document.getElementById("p");
+var show=p.type==="password";
+p.type=show?"text":"password";
+document.getElementById("eyeClosed").style.display=show?"none":"";
+document.getElementById("eyeOpen").style.display=show?"":"none";
+});
+
+document.getElementById("langBtn").addEventListener("click",function(){
+var idx=(langs.indexOf(lang)+1)%langs.length;
+lang=langs[idx];
+localStorage.setItem("lang",lang);
+applyLang();
+});
+
+fetch("/api/scan").then(function(r){return r.json()}).then(function(d){
+scanData=d;populateSelect();
+}).catch(function(){
+var sel=document.getElementById("sel");
+sel.innerHTML="";
+var o=document.createElement("option");o.value="";o.textContent=t("noNetworks");
+sel.appendChild(o);
+var oo=document.createElement("option");oo.value="__other__";oo.textContent=t("other");
+sel.appendChild(oo);
+});
+
+function pollStatus(){
+var btn=document.getElementById("btn"),msg=document.getElementById("msg");
+fetch("/api/status").then(function(r){return r.json()}).then(function(d){
+if(d.status==="connected"){msg.className="ok";msg.textContent=t("success");}
+else if(d.status==="failed"){msg.className="err";msg.textContent=t("fail")+"connection failed";btn.disabled=false;}
+else if(d.status==="connecting"){setTimeout(pollStatus,1000);}
+else{btn.disabled=false;}
+}).catch(function(){setTimeout(pollStatus,1500);});
+}
+
+document.getElementById("f").onsubmit=function(e){
+e.preventDefault();
+var sel=document.getElementById("sel");
+var ssid=sel.value==="__other__"?document.getElementById("manualSsid").value:sel.value;
+if(!ssid){return}
+var pass=document.getElementById("p").value;
+var btn=document.getElementById("btn"),msg=document.getElementById("msg");
+btn.disabled=true;msg.className="wait";msg.textContent=t("connecting");
+fetch("/api/wifi",{method:"POST",headers:{"Content-Type":"application/json"},
+body:JSON.stringify({ssid:ssid,pass:pass})
+}).then(function(r){return r.json()}).then(function(d){
+if(d.ok){setTimeout(pollStatus,1000);}
+else{msg.className="err";msg.textContent=t("fail")+(d.error||"unknown");btn.disabled=false;}
+}).catch(function(){msg.className="err";msg.textContent=t("netErr");btn.disabled=false;});
+};
+
+applyLang();
+</script></body></html>

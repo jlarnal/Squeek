@@ -13,6 +13,7 @@
 #include "mesh_delegate.h"
 #include "rtc_state.h"
 #include <Arduino.h>
+#include <esp_netif.h>
 #include <esp_wifi.h>
 #include <esp_mac.h>
 
@@ -141,6 +142,16 @@ void Gateway::onPeerLeft(const uint8_t* mac) {
 
 void Gateway::printStatus() {
     Serial.println("--- Gateway Status ---");
+
+    // Show router-assigned STA IP if connected
+    esp_netif_t* sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    esp_netif_ip_info_t ip = {};
+    if (sta && esp_netif_get_ip_info(sta, &ip) == ESP_OK && ip.ip.addr != 0) {
+        Serial.printf("Router IP: " IPSTR "\n", IP2STR(&ip.ip));
+    } else {
+        Serial.printf("Router IP: not connected\n");
+    }
+
     Serial.printf("Peers: %u\n", m_peerCount);
     PeerTable::print();
 }

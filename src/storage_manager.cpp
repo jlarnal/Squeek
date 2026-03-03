@@ -20,6 +20,7 @@ static const char* mimeTypeFor(const char* path) {
     if (strcasecmp(dot, ".css")  == 0) return "text/css";
     if (strcasecmp(dot, ".json") == 0) return "application/json";
     if (strcasecmp(dot, ".mp3")  == 0) return "audio/mpeg";
+    if (strcasecmp(dot, ".svg")  == 0) return "image/svg+xml";
     if (strcasecmp(dot, ".gz")   == 0) return "application/gzip";
 
     return "application/octet-stream";

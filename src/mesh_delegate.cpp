@@ -1,5 +1,6 @@
 #include "mesh_delegate.h"
 #include "web_server.h"
+#include "storage_manager.h"
 #include "mesh_conductor.h"
 #include "bsp.hpp"
 #include "sq_log.h"
@@ -27,44 +28,151 @@ static TimerHandle_t    s_watchdog = nullptr;
 static Delegate*        s_delegateInstance = nullptr;
 
 // ---------------------------------------------------------------------------
-// Minimal WiFi wizard HTML — served inline (no LittleFS dependency)
+// WiFi scan results — populated once in begin() before SoftAP starts
 // ---------------------------------------------------------------------------
-static const char WIZARD_HTML[] PROGMEM = R"rawliteral(
-<!DOCTYPE html><html><head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Squeek Setup</title>
-<style>
-body{font-family:system-ui,sans-serif;max-width:400px;margin:2em auto;padding:0 1em;background:#1a1a2e;color:#e0e0e0}
-h1{color:#00d4ff}input{width:100%;padding:8px;margin:4px 0 12px;box-sizing:border-box;border-radius:4px;border:1px solid #444;background:#0d0d1a;color:#e0e0e0}
-button{background:#00d4ff;color:#000;border:none;padding:10px 20px;border-radius:4px;cursor:pointer;font-size:1em;width:100%}
-button:disabled{opacity:0.5}
-#msg{margin-top:1em;padding:8px;border-radius:4px}
-.ok{background:#1b3a2a;border:1px solid #2d6a3e}
-.err{background:#3a1b1b;border:1px solid #6a2d2d}
-.wait{background:#3a3a1b;border:1px solid #6a6a2d}
-</style></head><body>
-<h1>Squeek Setup</h1>
-<p>Connect this mesh to your WiFi router.</p>
-<form id="f">
-<label>SSID<input id="s" name="ssid" required></label>
-<label>Password<input id="p" name="pass" type="password"></label>
-<button type="submit" id="btn">Connect</button>
-</form>
-<div id="msg"></div>
-<script>
-document.getElementById('f').onsubmit=function(e){
-  e.preventDefault();
-  var btn=document.getElementById('btn'),msg=document.getElementById('msg');
-  btn.disabled=true; msg.className='wait'; msg.textContent='Connecting...';
-  fetch('/api/wifi',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({ssid:document.getElementById('s').value,pass:document.getElementById('p').value})
-  }).then(function(r){return r.json()}).then(function(d){
-    if(d.ok){msg.className='ok';msg.textContent='Connected! Rebooting...';}
-    else{msg.className='err';msg.textContent='Failed: '+(d.error||'unknown');btn.disabled=false;}
-  }).catch(function(){msg.className='err';msg.textContent='Network error';btn.disabled=false;});
+static constexpr int MAX_SCAN_RESULTS = 20;
+
+struct ScanEntry {
+    char ssid[33];
+    int8_t rssi;
+    uint8_t auth;  // wifi_auth_mode_t
 };
-</script></body></html>
-)rawliteral";
+
+static ScanEntry s_scanResults[MAX_SCAN_RESULTS];
+static int       s_scanCount = 0;
+
+// ---------------------------------------------------------------------------
+// Connection state machine — runs in background task, polled via /api/status
+// ---------------------------------------------------------------------------
+enum ConnState : uint8_t { CONN_IDLE = 0, CONN_BUSY, CONN_OK, CONN_FAIL };
+static volatile ConnState s_connState = CONN_IDLE;
+static char s_pendingSsid[33];
+static char s_pendingPass[65];
+
+static void connectTask(void*) {
+    ESP_LOGI(TAG, "Attempting connection to router: %s", s_pendingSsid);
+
+    // Create STA netif if needed (AP netif already exists from startSoftAP)
+    if (!esp_netif_get_handle_from_ifkey("WIFI_STA_DEF")) {
+        esp_netif_create_default_wifi_sta();
+    }
+    esp_wifi_set_mode(WIFI_MODE_APSTA);
+
+    wifi_config_t sta_cfg = {};
+    strncpy((char*)sta_cfg.sta.ssid, s_pendingSsid, sizeof(sta_cfg.sta.ssid) - 1);
+    if (s_pendingPass[0]) {
+        strncpy((char*)sta_cfg.sta.password, s_pendingPass, sizeof(sta_cfg.sta.password) - 1);
+    }
+    esp_wifi_set_config(WIFI_IF_STA, &sta_cfg);
+    esp_wifi_connect();
+
+    // Poll for IP assignment (proves DHCP + full L3 connectivity)
+    esp_netif_t* sta_nif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    bool connected = false;
+    for (int i = 0; i < 30; i++) {   // 15 seconds max
+        vTaskDelay(pdMS_TO_TICKS(500));
+        esp_netif_ip_info_t ip = {};
+        if (sta_nif && esp_netif_get_ip_info(sta_nif, &ip) == ESP_OK && ip.ip.addr != 0) {
+            connected = true;
+            ESP_LOGI(TAG, "Router connection successful (IP=" IPSTR ")", IP2STR(&ip.ip));
+            break;
+        }
+    }
+
+    if (connected) {
+        esp_wifi_disconnect();
+        SqWebServer::saveWifiCreds(s_pendingSsid, s_pendingPass);
+        s_connState = CONN_OK;
+
+        // Let the page poll one more time to see CONN_OK, then clean up
+        vTaskDelay(pdMS_TO_TICKS(2000));
+
+        // Stop web server + AP to avoid rts error spam during shutdown
+        SqWebServer::stopDNS();
+        if (s_server) { s_server->end(); }
+        esp_wifi_stop();
+
+        rtc_state_t* rtc = RtcState::get();
+        rtc->next_role = (uint8_t)RoleId::PEER;
+        rtc->delegate_active = 1;  // signal peer to push creds
+        RtcState::save();
+        esp_restart();
+    } else {
+        ESP_LOGW(TAG, "Router connection failed");
+        esp_wifi_disconnect();
+        esp_wifi_set_mode(WIFI_MODE_AP);
+        s_connState = CONN_FAIL;
+    }
+
+    vTaskDelete(nullptr);
+}
+
+static void doWiFiScan() {
+    ESP_LOGI(TAG, "Starting WiFi scan (STA mode)...");
+
+    // Brief STA mode for scanning
+    esp_wifi_set_mode(WIFI_MODE_STA);
+    esp_wifi_start();
+
+    wifi_scan_config_t scanCfg = {};
+    scanCfg.show_hidden = false;
+    scanCfg.scan_type   = WIFI_SCAN_TYPE_ACTIVE;
+    scanCfg.scan_time.active.min = 240;   // ms per channel
+    scanCfg.scan_time.active.max = 480;   // ms per channel
+    esp_err_t err = esp_wifi_scan_start(&scanCfg, true);  // blocking
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "WiFi scan failed: %s", esp_err_to_name(err));
+        esp_wifi_stop();
+        return;
+    }
+
+    uint16_t apCount = 0;
+    esp_wifi_scan_get_ap_num(&apCount);
+    if (apCount == 0) {
+        ESP_LOGI(TAG, "WiFi scan: 0 networks found");
+        esp_wifi_stop();
+        return;
+    }
+
+    // Allocate temp buffer for all results
+    uint16_t fetchCount = (apCount > 64) ? 64 : apCount;
+    wifi_ap_record_t* records = (wifi_ap_record_t*)malloc(fetchCount * sizeof(wifi_ap_record_t));
+    if (!records) {
+        ESP_LOGE(TAG, "WiFi scan: malloc failed");
+        esp_wifi_scan_get_ap_records(&fetchCount, nullptr);  // free internal buffer
+        esp_wifi_stop();
+        return;
+    }
+
+    esp_wifi_scan_get_ap_records(&fetchCount, records);
+    esp_wifi_stop();
+
+    // Sort by RSSI descending (records are already sorted by ESP-IDF, but ensure it)
+    // Deduplicate by SSID, keep strongest
+    s_scanCount = 0;
+    for (uint16_t i = 0; i < fetchCount && s_scanCount < MAX_SCAN_RESULTS; i++) {
+        if (records[i].ssid[0] == '\0') continue;  // skip hidden
+
+        // Check for duplicate SSID
+        bool dup = false;
+        for (int j = 0; j < s_scanCount; j++) {
+            if (strcmp(s_scanResults[j].ssid, (const char*)records[i].ssid) == 0) {
+                dup = true;
+                break;
+            }
+        }
+        if (dup) continue;
+
+        strncpy(s_scanResults[s_scanCount].ssid, (const char*)records[i].ssid, 32);
+        s_scanResults[s_scanCount].ssid[32] = '\0';
+        s_scanResults[s_scanCount].rssi = records[i].rssi;
+        s_scanResults[s_scanCount].auth = (uint8_t)records[i].authmode;
+        s_scanCount++;
+    }
+
+    free(records);
+    ESP_LOGI(TAG, "WiFi scan: %d unique networks", s_scanCount);
+}
 
 // ---------------------------------------------------------------------------
 // Watchdog callback — reboots as peer if no creds received in time
@@ -136,9 +244,48 @@ static void startSoftAP() {
 // WiFi wizard routes
 // ---------------------------------------------------------------------------
 static void registerWizardRoutes() {
-    // Serve wizard page
+    // Serve wizard page from LittleFS (gzip-transparent via StorageManager)
     s_server->on("/", HTTP_GET, [](AsyncWebServerRequest* req) {
-        req->send(200, "text/html", WIZARD_HTML);
+        if (!StorageManager::serveFile(req, "/wizard.html")) {
+            req->send(500, "text/plain", "wizard.html not found on filesystem");
+        }
+    });
+
+    // WiFi scan results as JSON
+    s_server->on("/api/scan", HTTP_GET, [](AsyncWebServerRequest* req) {
+        // Build JSON array: [{"ssid":"...","rssi":-45,"auth":3}, ...]
+        String json = "[";
+        for (int i = 0; i < s_scanCount; i++) {
+            if (i > 0) json += ",";
+            json += "{\"ssid\":\"";
+            // Escape any quotes in SSID
+            for (const char* p = s_scanResults[i].ssid; *p; p++) {
+                if (*p == '"') json += "\\\"";
+                else if (*p == '\\') json += "\\\\";
+                else json += *p;
+            }
+            json += "\",\"rssi\":";
+            json += String((int)s_scanResults[i].rssi);
+            json += ",\"auth\":";
+            json += String((int)s_scanResults[i].auth);
+            json += "}";
+        }
+        json += "]";
+        req->send(200, "application/json", json);
+    });
+
+    // Connection status polling endpoint
+    s_server->on("/api/status", HTTP_GET, [](AsyncWebServerRequest* req) {
+        const char* s = "idle";
+        switch (s_connState) {
+            case CONN_BUSY: s = "connecting"; break;
+            case CONN_OK:   s = "connected";  break;
+            case CONN_FAIL: s = "failed";     break;
+            default:        s = "idle";        break;
+        }
+        char json[48];
+        snprintf(json, sizeof(json), "{\"status\":\"%s\"}", s);
+        req->send(200, "application/json", json);
     });
 
     // Captive portal catch-all redirects
@@ -149,13 +296,18 @@ static void registerWizardRoutes() {
         req->redirect("/");
     });
 
-    // WiFi credential submission
+    // WiFi credential submission — returns immediately, spawns background task
     s_server->on("/api/wifi", HTTP_POST,
         [](AsyncWebServerRequest* req) {},  // no-op for body handler
         nullptr,
         [](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t index, size_t total) {
             if (index + len > 256) { req->send(400, "application/json", "{\"ok\":false,\"error\":\"too large\"}"); return; }
             if (index + len < total) return;
+
+            if (s_connState == CONN_BUSY) {
+                req->send(409, "application/json", "{\"ok\":false,\"error\":\"already connecting\"}");
+                return;
+            }
 
             char buf[257];
             size_t cpLen = (total < 256) ? total : 256;
@@ -185,12 +337,16 @@ static void registerWizardRoutes() {
                 return;
             }
 
-            bool ok = s_delegateInstance && s_delegateInstance->onCredsSubmitted(ssid.c_str(), pass.c_str());
-            if (ok) {
-                req->send(200, "application/json", "{\"ok\":true}");
-            } else {
-                req->send(200, "application/json", "{\"ok\":false,\"error\":\"connection failed\"}");
-            }
+            // Stash creds and spawn background connection task
+            strncpy(s_pendingSsid, ssid.c_str(), sizeof(s_pendingSsid) - 1);
+            s_pendingSsid[sizeof(s_pendingSsid) - 1] = '\0';
+            strncpy(s_pendingPass, pass.c_str(), sizeof(s_pendingPass) - 1);
+            s_pendingPass[sizeof(s_pendingPass) - 1] = '\0';
+
+            s_connState = CONN_BUSY;
+            xTaskCreate(connectTask, "dlg_conn", 4096, nullptr, 3, nullptr);
+
+            req->send(200, "application/json", "{\"ok\":true,\"status\":\"connecting\"}");
         }
     );
 
@@ -214,6 +370,12 @@ void Delegate::begin() {
     RtcState::save();
 
     ESP_LOGI(TAG, "Entering Delegate role");
+
+    // Scan for WiFi networks before starting SoftAP (needs STA mode)
+    doWiFiScan();
+
+    // Mount LittleFS for wizard.html.gz
+    StorageManager::init();
 
     // Start SoftAP
     startSoftAP();
@@ -268,43 +430,8 @@ void Delegate::end() {
     ESP_LOGI(TAG, "Delegate role ended");
 }
 
-bool Delegate::onCredsSubmitted(const char* ssid, const char* pass) {
-    ESP_LOGI(TAG, "Attempting connection to router: %s", ssid);
-
-    // Temporarily switch to STA+AP to test the connection
-    WiFi.mode(WIFI_AP_STA);
-    WiFi.begin(ssid, pass);
-
-    // Wait up to 15 seconds for connection
-    int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 30) {
-        vTaskDelay(pdMS_TO_TICKS(500));
-        attempts++;
-    }
-
-    if (WiFi.status() == WL_CONNECTED) {
-        ESP_LOGI(TAG, "Router connection successful (IP=%s)", WiFi.localIP().toString().c_str());
-        WiFi.disconnect(true);
-
-        // Save credentials to NVS
-        SqWebServer::saveWifiCreds(ssid, pass);
-
-        // Spawn deferred reboot task (2s delay to let HTTP response flush)
-        xTaskCreate([](void*) {
-            vTaskDelay(pdMS_TO_TICKS(2000));
-            rtc_state_t* rtc = RtcState::get();
-            rtc->next_role = (uint8_t)RoleId::PEER;
-            rtc->delegate_active = 1;  // signal peer to push creds
-            RtcState::save();
-            esp_restart();
-        }, "dlg_reboot", 2048, nullptr, 2, nullptr);
-
-        return true;
-    }
-
-    ESP_LOGW(TAG, "Router connection failed (status=%d)", WiFi.status());
-    WiFi.disconnect(true);
-    WiFi.mode(WIFI_AP);  // back to AP-only
+bool Delegate::onCredsSubmitted(const char* /*ssid*/, const char* /*pass*/) {
+    // Legacy — connection now handled by connectTask via /api/wifi POST
     return false;
 }
 
