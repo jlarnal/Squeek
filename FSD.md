@@ -223,7 +223,7 @@ LOW_BATTERY → DEEP_SLEEP (timer-only wake for periodic check)
 | Component | Library / API | Purpose |
 |-----------|--------------|---------|
 | Build system | PlatformIO + pioarduino platform | Dual Arduino + ESP-IDF |
-| WiFi Mesh | ESP-IDF WiFi Mesh (`esp_mesh`) | Self-healing mesh network (FIXED_ROOT mode) |
+| WiFi Mesh | ESP-IDF WiFi Mesh (`esp_mesh`) | Self-healing mesh network (native root election via `fix_root(false)`) |
 | FTM | ESP-IDF FTM API (`esp_wifi_ftm`) | Pairwise ranging for localization |
 | Audio synthesis | LEDC + GPTimer | Procedural tone generation (chirps, squeaks, warbles) |
 | MP3 decode | chmorgan/esp-libhelix-mp3 (future) | Compressed sample playback (not yet integrated) |
@@ -311,7 +311,7 @@ LOW_BATTERY → DEEP_SLEEP (timer-only wake for periodic check)
 - [x] Delegate ticket — gateway tracks delegate MAC + monotonic `remaining_s` countdown (never rolls back, floors at zero)
 - [x] Step-down suppression while delegate ticket is active; ticket transfer via `MSG_TYPE_DELEGATE_TICKET` / `MSG_TYPE_DELEGATE_TICKET_ACK` on gateway handoff
 - [x] MAC-jittered backoff on gateway loss (5–15s), delegate reboot race fix
-- [x] `cfg.channel = 0` — routerless nodes scan all channels to find routed meshes
+- [x] `cfg.channel = 1` for routerless bootstrap (fixed channel so all nodes converge); `cfg.channel = 0` on delegate return (scan all channels for existing mesh)
 - [x] Fast-path boot from RTC state (GATEWAY/PEER/DELEGATE roles)
 - [x] `MSG_TYPE_SETUP_DELEGATE` / `MSG_TYPE_DELEGATE_RESULT` / `MSG_TYPE_MERGE_CHECK`
 - [x] WiFi scan filters out other `Squeek_Config_*` SSIDs
@@ -489,7 +489,7 @@ All major subsystem classes use the **static class** pattern: deleted constructo
 | `webEnabled` | `bool` | `"webEn"` | `true` | 5 | Web server enable/disable |
 | `fastScanDelay_s` | `uint16_t` | `"fastScn"` | `5` | 5 | Fast-boot scan delay before self-promotion (seconds) |
 | `delegateTimeout_s` | `uint16_t` | `"dlgTmo"` | `240` | 5 | Delegate watchdog timeout (seconds, clamped 60–600) |
-| `scanContestTimeout_s` | `uint16_t` | `"scnTmo"` | `10` | 5 | Scan contest collection timeout — how long gateway waits for peer scan results (seconds, clamped 5–30) |
+| ~~`scanContestTimeout_s`~~ | — | — | — | — | *Removed — scan contest timeout hardcoded to 10s in `mesh_gateway.cpp`* |
 
 **Supported `PropertyValue` types:** `bool`, `uint16_t`, `uint32_t`, `uint64_t`, `float` (stored as bit-cast `uint32_t` in NVS).
 
@@ -513,7 +513,7 @@ The waived node advertises `PEER_STATUS_WAIVED` in its heartbeat flags, so the n
 
 ### 7.2.1 Mesh Timing Scenarios
 
-Sequence diagrams for the mesh lifecycle. With `fix_root(false)`, ESP-MESH handles root election natively — no promote timer or manual self-promotion is needed. ESP-MESH's internal RSSI-based voting elects a root; during routerless bootstrap all nodes have RSSI=0, so the election completes with an arbitrary winner.
+Sequence diagrams for the mesh lifecycle. With `fix_root(false)`, ESP-MESH handles root election natively. However, routerless bootstrap requires a safety-net **bootstrap timer**: a MAC-based deterministic delay (5–30s via FNV-1a hash of STA MAC) started at `esp_mesh_start()`. If no parent is found before the timer fires, the node self-elects as root via `esp_mesh_set_type(MESH_ROOT)`. The lowest-MAC node wins the race deterministically. All routerless nodes use fixed channel 1 so they converge on the same frequency.
 
 Key constants (from `bsp.hpp`): `MESH_REELECT_SLEEP_MS` = 5 s.
 
@@ -652,10 +652,11 @@ If the old gateway crashes before transferring, the delegate eventually times ou
 9. Delegate starts SoftAP `Squeek_Config_XXYY`, captive portal, 240 s watchdog
 10. User connects phone to the SoftAP, enters WiFi credentials via wizard
 11. Delegate tests router connection, saves creds to NVS
-12. Delegate tears down SoftAP and web server immediately after saving creds (deauths clients, no poll window), then reboots as Peer
-13. Peer suppresses router creds in mesh config (delegate return flag) — rejoins the original mesh on the old channel, sends `MSG_TYPE_WIFI_CREDS` to gateway
-14. Gateway saves creds, clears ticket (step-down resumes), starts web server, broadcasts creds to all peers
-15. Gateway applies router creds to mesh config via `esp_mesh_set_config()` → ESP-MESH triggers coordinated channel migration to router channel; all peers also update their local mesh config
+12. Delegate tears down SoftAP (deauths phone first, then STA disconnect — order matters to avoid `(tx)rts error` spam), reboots as Peer with `delegate_active=1` in RTC
+13. Peer suppresses router creds in mesh config (`delegate_active` flag), sets `cfg.channel=0` (scan all channels) — rejoins the existing mesh wherever it is
+14. Peer pushes `MSG_TYPE_WIFI_CREDS` to gateway (retry loop: 10 attempts, 3s apart, early-exit on ACK). Gateway sends `MSG_TYPE_WIFI_CREDS_ACK` back to sender via `sendToNode(from.addr)` (not `sendToRoot()` — root would loopback to itself)
+15. If mesh disconnects mid-push, `delegate_active` stays set in RTC — next boot retries. Only cleared on confirmed ACK
+16. Gateway saves creds to NVS, broadcasts to all peers, then reboots after 2s delay (timer-deferred `esp_restart()` — `esp_mesh_set_config()` is unreliable at runtime). On reboot, gateway loads creds, connects to router, mesh reforms on router's channel. Children lose gateway, backoff-reboot, rejoin on router's channel with creds from their own NVS
 
 **Delegation flow (lone gateway):**
 
@@ -683,7 +684,7 @@ If the old gateway crashes before transferring, the delegate eventually times ou
 
 1. ~~**Piezo GPIO assignment**~~ — Resolved: GPIO22 (`PIEZO_PIN_A`) + GPIO23 (`PIEZO_PIN_B`), defined in `bsp.hpp`.
 2. ~~**Battery ADC GPIO**~~ — Resolved: GPIO2 (`BATTERY_ADC_PIN`), defined in `bsp.hpp`.
-3. ~~**ESP-IDF WiFi Mesh vs ESP-NOW**~~ — Resolved: using `esp_mesh` (ESP-IDF WiFi Mesh) in FIXED_ROOT mode. Implemented in `MeshConductor`.
+3. ~~**ESP-IDF WiFi Mesh vs ESP-NOW**~~ — Resolved: using `esp_mesh` (ESP-IDF WiFi Mesh) with native root election (`fix_root(false)`). Implemented in `MeshConductor`.
 4. ~~**Mozzi on ESP32-C6**~~ — Resolved: Mozzi incompatible with ESP32-C6 single-core RISC-V (watchdog resets). Replaced with LEDC PWM + GPTimer.
 5. ~~**Web UI framework**~~ — Resolved: ESPAsyncWebServer + vanilla HTML/JS served from LittleFS (gzip-compressed).
 6. **FTM accuracy in practice** — Real-world testing needed to calibrate expectations for 3D positioning.

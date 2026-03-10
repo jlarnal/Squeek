@@ -38,7 +38,7 @@ Phase 4 delivers: ClockSync (gateway millis() broadcast, peer offset tracking), 
 
 **Phase 5A — Web Infrastructure: COMPLETE** (LittleFS, SqWebServer, StorageManager, DNS captive portal)
 
-**Phase 5B — Setup Delegate & STA Connectivity: IMPLEMENTED** (needs hardware verification)
+**Phase 5B — Setup Delegate & STA Connectivity: VERIFIED** (hardware-tested, committed 1f5120a)
 
 Phase 5B delivers: Delegate role (IMeshRole), WiFi wizard SoftAP (Squeek_Config_XXYY), credential propagation (delegate→gateway→peers), deferred delegation (30s timer, routing table), exhaustion guard (2 attempts), MAC-jittered gateway-loss backoff, fast-path boot, channel=0 cross-channel discovery, Squeek_Config_* scan filter, 4x LED blink on client connect.
 

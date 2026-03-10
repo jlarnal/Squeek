@@ -94,7 +94,7 @@ static void bootstrapTimerCb(TimerHandle_t timer) {
 
 // Compute a deterministic bootstrap delay from the node's MAC address.
 // Lower MAC hash → shorter delay → that node becomes root first.
-// Range: 10-60s, spread by FNV-1a hash of MAC.
+// Range: 5-30s, spread by FNV-1a hash of MAC.
 static uint32_t macBasedBootstrapDelay() {
     uint8_t mac[6];
     esp_read_mac(mac, ESP_MAC_WIFI_STA);
