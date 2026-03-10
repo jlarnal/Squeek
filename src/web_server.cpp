@@ -1,11 +1,21 @@
 #include "web_server.h"
 #include "storage_manager.h"
 #include "property_value.h"
+#include "peer_table.h"
+#include "orchestrator.h"
+#include "tone_library.h"
+#include "nvs_config_registry.h"
+#include "nvs_config.h"
+#include "power_manager.h"
+#include "mesh_conductor.h"
+#include "rtc_state.h"
 
 #include <ESPAsyncWebServer.h>
 #include <AsyncWebSocket.h>
+#include <ArduinoJson.h>
 #include <WiFi.h>
 #include <esp_log.h>
+#include <esp_mac.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <lwip/sockets.h>
@@ -44,6 +54,11 @@ bool SqWebServer::saveWifiCreds(const char* ssid, const char* pass) {
     if (err != ESP_OK) { ESP_LOGE(TAG, "nvs_set_str(wifiPass) failed: %s", esp_err_to_name(err)); return false; }
     nvs_commit(NvsConfig::handle);
     ESP_LOGI(TAG, "WiFi credentials saved to NVS (SSID=%s)", ssid);
+
+    // Reset delegate attempt counter — creds obtained successfully
+    RtcState::get()->delegate_attempts = 0;
+    RtcState::save();
+
     return true;
 }
 
@@ -229,15 +244,226 @@ void SqWebServer::onWsEvent(AsyncWebSocket* server, AsyncWebSocketClient* client
 // ---------------------------------------------------------------------------
 // Route registration
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Helper: format MAC as string
+// ---------------------------------------------------------------------------
+static void macToStr(const uint8_t* mac, char* out) {
+    snprintf(out, 18, "%02X:%02X:%02X:%02X:%02X:%02X",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+}
+
 void SqWebServer::registerRoutes() {
-    // Root → index.html
+    // Root → dashboard.html (fallback to index.html then inline stub)
     s_server->on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
-        if (!StorageManager::serveFile(request, "/index.html")) {
-            request->send(200, "text/html",
-                "<!DOCTYPE html><html><body>"
-                "<h1>Squeek</h1><p>No UI uploaded yet. Use OTA to upload.</p>"
-                "</body></html>");
+        if (StorageManager::serveFile(request, "/dashboard.html")) return;
+        if (StorageManager::serveFile(request, "/index.html")) return;
+        request->send(200, "text/html",
+            "<!DOCTYPE html><html><body>"
+            "<h1>Squeek</h1><p>No UI uploaded yet. Use OTA to upload.</p>"
+            "</body></html>");
+    });
+
+    // ----- GET /api/status -----
+    s_server->on("/api/status", HTTP_GET, [](AsyncWebServerRequest* request) {
+        JsonDocument doc;
+        uint8_t mac[6];
+        esp_read_mac(mac, ESP_MAC_WIFI_STA);
+        char macStr[18];
+        macToStr(mac, macStr);
+        doc["mac"]          = macStr;
+        doc["battery_mv"]   = PowerManager::batteryMv();
+        doc["peer_count"]   = PeerTable::peerCount();
+        doc["alive_peers"]  = PeerTable::alivePeerCount();
+        doc["dimension"]    = PeerTable::getDimension();
+        doc["uptime_s"]     = millis() / 1000;
+        doc["free_heap"]    = esp_get_free_heap_size();
+        doc["orch_mode"]    = (uint8_t)Orchestrator::getMode();
+        doc["build"]        = __DATE__ " " __TIME__;
+        char buf[300];
+        serializeJson(doc, buf, sizeof(buf));
+        request->send(200, "application/json", buf);
+    });
+
+    // ----- GET /api/peers -----
+    s_server->on("/api/peers", HTTP_GET, [](AsyncWebServerRequest* request) {
+        JsonDocument doc;
+        JsonArray arr = doc.to<JsonArray>();
+        uint8_t count = PeerTable::peerCount();
+        uint8_t ownMac[6];
+        esp_read_mac(ownMac, ESP_MAC_WIFI_STA);
+        for (uint8_t i = 0; i < count; i++) {
+            PeerEntry* e = PeerTable::getEntryByIndex(i);
+            if (!e) continue;
+            JsonObject o = arr.add<JsonObject>();
+            o["idx"] = i;
+            char macStr[18];
+            macToStr(e->mac, macStr);
+            o["mac"]        = macStr;
+            o["battery_mv"] = e->battery_mv;
+            o["flags"]      = e->flags;
+            JsonArray pos   = o["pos"].to<JsonArray>();
+            pos.add(e->position[0]);
+            pos.add(e->position[1]);
+            pos.add(e->position[2]);
+            o["confidence"] = e->confidence;
+            o["is_gateway"] = (memcmp(e->mac, ownMac, 6) == 0 && MeshConductor::isGateway());
         }
+        String out;
+        serializeJson(doc, out);
+        request->send(200, "application/json", out);
+    });
+
+    // ----- GET /api/distances -----
+    s_server->on("/api/distances", HTTP_GET, [](AsyncWebServerRequest* request) {
+        JsonDocument doc;
+        JsonArray arr = doc.to<JsonArray>();
+        uint8_t count = PeerTable::peerCount();
+        for (uint8_t a = 0; a < count; a++) {
+            for (uint8_t b = a + 1; b < count; b++) {
+                float d = PeerTable::getDistance(a, b);
+                if (d >= 0) {
+                    JsonObject o = arr.add<JsonObject>();
+                    o["a"] = a;
+                    o["b"] = b;
+                    o["d"] = d;
+                }
+            }
+        }
+        String out;
+        serializeJson(doc, out);
+        request->send(200, "application/json", out);
+    });
+
+    // ----- GET /api/tones -----
+    s_server->on("/api/tones", HTTP_GET, [](AsyncWebServerRequest* request) {
+        JsonDocument doc;
+        JsonArray arr = doc.to<JsonArray>();
+        uint8_t count = ToneLibrary::count();
+        for (uint8_t i = 0; i < count; i++) {
+            JsonObject o = arr.add<JsonObject>();
+            o["idx"]  = i;
+            o["name"] = ToneLibrary::nameByIndex(i);
+        }
+        String out;
+        serializeJson(doc, out);
+        request->send(200, "application/json", out);
+    });
+
+    // ----- GET /api/orch -----
+    s_server->on("/api/orch", HTTP_GET, [](AsyncWebServerRequest* request) {
+        JsonDocument doc;
+        doc["mode"]         = (uint8_t)Orchestrator::getMode();
+        doc["travel_order"] = (uint8_t)Orchestrator::getTravelOrder();
+        JsonArray seq = doc["sequence"].to<JsonArray>();
+        const SeqStep* steps = Orchestrator::sequenceSteps();
+        uint8_t count = Orchestrator::sequenceCount();
+        for (uint8_t i = 0; i < count; i++) {
+            JsonObject s = seq.add<JsonObject>();
+            s["node"]  = steps[i].node_index;
+            s["tone"]  = steps[i].tone_index;
+            s["delay"] = steps[i].delay_ms;
+        }
+        String out;
+        serializeJson(doc, out);
+        request->send(200, "application/json", out);
+    });
+
+    // ----- GET /api/config -----
+    s_server->on("/api/config", HTTP_GET, [](AsyncWebServerRequest* request) {
+        JsonDocument doc;
+        configBuildJson(doc, nullptr, 0);
+        // Add _meta array
+        JsonArray meta = doc["_meta"].to<JsonArray>();
+        uint8_t fc = configFieldCount();
+        for (uint8_t i = 0; i < fc; i++) {
+            const ConfigField* f = configFieldByIndex(i);
+            if (!f) continue;
+            JsonObject m = meta.add<JsonObject>();
+            m["key"]  = f->key;
+            m["desc"] = f->description;
+            m["type"] = (f->type == CFG_BOOL) ? "bool" :
+                        (f->type == CFG_FLOAT) ? "float" : "u32";
+        }
+        String out;
+        serializeJson(doc, out);
+        request->send(200, "application/json", out);
+    });
+
+    // ----- GET /api/storage -----
+    s_server->on("/api/storage", HTTP_GET, [](AsyncWebServerRequest* request) {
+        JsonDocument doc;
+        doc["total"] = StorageManager::totalBytes();
+        doc["used"]  = StorageManager::usedBytes();
+        String out;
+        serializeJson(doc, out);
+        request->send(200, "application/json", out);
+    });
+
+    // ----- POST /api/orch -----
+    s_server->on("/api/orch", HTTP_POST, [](AsyncWebServerRequest* request) {
+        // Handled by body callback
+    }, nullptr, [](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t, size_t) {
+        JsonDocument doc;
+        if (deserializeJson(doc, data, len)) {
+            request->send(400, "application/json", "{\"error\":\"bad json\"}");
+            return;
+        }
+        if (doc["mode"].is<uint8_t>()) {
+            Orchestrator::setMode((OrchMode)doc["mode"].as<uint8_t>());
+        }
+        if (doc["travel_order"].is<uint8_t>()) {
+            Orchestrator::setTravelOrder((TravelOrder)doc["travel_order"].as<uint8_t>());
+        }
+        request->send(200, "application/json", "{\"ok\":true}");
+    });
+
+    // ----- POST /api/config -----
+    s_server->on("/api/config", HTTP_POST, [](AsyncWebServerRequest* request) {
+        // Handled by body callback
+    }, nullptr, [](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t, size_t) {
+        JsonDocument doc;
+        if (deserializeJson(doc, data, len)) {
+            request->send(400, "application/json", "{\"error\":\"bad json\"}");
+            return;
+        }
+        uint8_t applied = configApplyJson(doc.as<JsonObjectConst>());
+        char buf[32];
+        snprintf(buf, sizeof(buf), "{\"applied\":%u}", applied);
+        request->send(200, "application/json", buf);
+    });
+
+    // ----- POST /api/sequence -----
+    s_server->on("/api/sequence", HTTP_POST, [](AsyncWebServerRequest* request) {
+        // Handled by body callback
+    }, nullptr, [](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t, size_t) {
+        JsonDocument doc;
+        if (deserializeJson(doc, data, len)) {
+            request->send(400, "application/json", "{\"error\":\"bad json\"}");
+            return;
+        }
+        Orchestrator::clearSequence();
+        JsonArray steps = doc["steps"].as<JsonArray>();
+        for (JsonObject s : steps) {
+            Orchestrator::addSequenceStep(
+                s["node"].as<uint8_t>(),
+                s["tone"].as<uint8_t>(),
+                s["delay"].as<uint16_t>()
+            );
+        }
+        if (doc["save"].as<bool>()) {
+            Orchestrator::saveSequence();
+        }
+        char buf[32];
+        snprintf(buf, sizeof(buf), "{\"steps\":%u}", Orchestrator::sequenceCount());
+        request->send(200, "application/json", buf);
+    });
+
+    // ----- POST /api/reboot -----
+    s_server->on("/api/reboot", HTTP_POST, [](AsyncWebServerRequest* request) {
+        request->send(200, "application/json", "{\"ok\":true}");
+        // Delay to let the response flush before restarting
+        vTaskDelay(pdMS_TO_TICKS(500));
+        esp_restart();
     });
 
     // Catch-all: try to serve from LittleFS, else 404
@@ -382,4 +608,17 @@ void SqWebServer::broadcast(const char* json) {
     if (s_ws && s_ws->count() > 0) {
         s_ws->textAll(json);
     }
+}
+
+void SqWebServer::broadcastPeers() {
+    if (!s_ws || s_ws->count() == 0) return;
+    broadcast("{\"type\":\"peer_update\"}");
+}
+
+void SqWebServer::broadcastOrchState() {
+    if (!s_ws || s_ws->count() == 0) return;
+    char buf[64];
+    snprintf(buf, sizeof(buf), "{\"type\":\"orch_update\",\"mode\":%u,\"travel_order\":%u}",
+             (uint8_t)Orchestrator::getMode(), (uint8_t)Orchestrator::getTravelOrder());
+    broadcast(buf);
 }

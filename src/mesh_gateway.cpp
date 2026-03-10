@@ -15,14 +15,91 @@
 #include <Arduino.h>
 #include <esp_netif.h>
 #include <esp_wifi.h>
+#include <esp_mesh.h>
 #include <esp_mac.h>
 
 // Gateway self-heartbeat timer — updates own battery in PeerTable
 static TimerHandle_t s_gwHeartbeatTimer = nullptr;
+// Scan contest: collect results from peers
+static TimerHandle_t s_scanContestTimer = nullptr;
+
+struct ScanContestEntry { uint8_t mac[6]; uint8_t ssid_count; };
+static ScanContestEntry s_scanResults[MESH_MAX_NODES];
+static uint8_t s_scanResultCount = 0;
+static bool s_scanContestActive = false;
+
+// Delegate ticket — tracks an active delegate out in the field
+static TimerHandle_t s_ticketTimer = nullptr;
+static uint8_t  s_ticketMac[6] = {0};
+static uint16_t s_ticketRemaining = 0;
+
+static void ticketCountdownCb(TimerHandle_t t) {
+    (void)t;
+    if (s_ticketRemaining > 0) {
+        s_ticketRemaining--;
+        // Persist to RTC every 10s (avoid flash wear)
+        if (s_ticketRemaining % 10 == 0) {
+            rtc_state_t* rtc = RtcState::get();
+            rtc->ticket_remaining_s = s_ticketRemaining;
+            RtcState::save();
+        }
+        if (s_ticketRemaining == 0) {
+            SqLog.println("[gateway] Delegate ticket expired");
+            memset(s_ticketMac, 0, 6);
+            rtc_state_t* rtc = RtcState::get();
+            memset(rtc->ticket_delegate_mac, 0, 6);
+            rtc->ticket_remaining_s = 0;
+            RtcState::save();
+        }
+    }
+}
 
 static void gwHeartbeatCb(TimerHandle_t t) {
     (void)t;
     PeerTable::updateSelf((uint16_t)PowerManager::batteryMv());
+}
+
+// Scan contest timeout — pick winner and dispatch delegate
+static void scanContestTimeoutCb(TimerHandle_t t) {
+    (void)t;
+    s_scanContestActive = false;
+
+    if (s_scanResultCount == 0) {
+        SqLog.println("[gateway] Scan contest: no responses — aborting");
+        return;
+    }
+
+    // Pick peer with highest ssid_count
+    uint8_t bestIdx = 0;
+    for (uint8_t i = 1; i < s_scanResultCount; i++) {
+        if (s_scanResults[i].ssid_count > s_scanResults[bestIdx].ssid_count) {
+            bestIdx = i;
+        }
+    }
+
+    const uint8_t* winner = s_scanResults[bestIdx].mac;
+    SqLog.printf("[gateway] Scan contest winner: %02X:%02X:%02X:%02X:%02X:%02X (%d SSIDs)\n",
+        winner[0], winner[1], winner[2], winner[3], winner[4], winner[5],
+        s_scanResults[bestIdx].ssid_count);
+
+    // Designate winner as delegate
+    uint8_t ownMac[6];
+    esp_read_mac(ownMac, ESP_MAC_WIFI_STA);
+
+    SetupDelegateMsg msg = {};
+    msg.type = MSG_TYPE_SETUP_DELEGATE;
+    memcpy(msg.gateway_mac, ownMac, 6);
+    MeshConductor::sendToNode(winner, &msg, sizeof(msg));
+
+    // Start delegate ticket countdown
+    memcpy(s_ticketMac, winner, 6);
+    s_ticketRemaining = NVS_DEFAULT_DELEGATE_TMO;
+    rtc_state_t* rtc = RtcState::get();
+    memcpy(rtc->ticket_delegate_mac, winner, 6);
+    rtc->ticket_remaining_s = s_ticketRemaining;
+    RtcState::save();
+
+    SqLog.printf("[gateway] Delegate ticket started: %us\n", s_ticketRemaining);
 }
 
 void Gateway::begin() {
@@ -50,55 +127,32 @@ void Gateway::begin() {
     }
     xTimerStart(s_gwHeartbeatTimer, 0);
 
+    // Restore delegate ticket from RTC (survives gateway handoff)
+    {
+        rtc_state_t* rtc = RtcState::get();
+        static const uint8_t zero[6] = {0};
+        if (rtc->ticket_remaining_s > 0 && memcmp(rtc->ticket_delegate_mac, zero, 6) != 0) {
+            memcpy(s_ticketMac, rtc->ticket_delegate_mac, 6);
+            s_ticketRemaining = rtc->ticket_remaining_s;
+            SqLog.printf("[gateway] Restored delegate ticket: %02X:%02X:%02X:%02X:%02X:%02X (%us remaining)\n",
+                s_ticketMac[0], s_ticketMac[1], s_ticketMac[2],
+                s_ticketMac[3], s_ticketMac[4], s_ticketMac[5], s_ticketRemaining);
+        }
+    }
+
+    // Start ticket countdown timer (always runs, ticks only when remaining > 0)
+    if (s_ticketTimer == nullptr) {
+        s_ticketTimer = xTimerCreate("ticket", pdMS_TO_TICKS(1000),
+                                       pdTRUE, nullptr, ticketCountdownCb);
+    }
+    xTimerStart(s_ticketTimer, 0);
+
     // Phase 5: Web UI
     if (SqWebServer::hasWifiCreds()) {
         SqWebServer::start();
     } else {
-        // No WiFi creds — need Setup Delegate mode
-        // Lone gateway (0 peers) reboots itself as delegate
-        if (m_peerCount == 0) {
-            SqLog.println("[gateway] No WiFi creds, rebooting as delegate for setup");
-            rtc_state_t* rtc = RtcState::get();
-            rtc->next_role = (uint8_t)RoleId::DELEGATE;
-            RtcState::save();
-            vTaskDelay(pdMS_TO_TICKS(200));
-            esp_restart();
-        } else {
-            // Has peers — pick best alive peer and designate as delegate
-            uint8_t bestIdx = 0;
-            uint16_t bestBat = 0;
-            uint8_t count = PeerTable::peerCount();
-            for (uint8_t i = 1; i < count; i++) {
-                PeerEntry* e = PeerTable::getEntryByIndex(i);
-                if (!e || (e->flags & PEER_STATUS_DEAD)) continue;
-                if (e->battery_mv > bestBat) {
-                    bestBat = e->battery_mv;
-                    bestIdx = i;
-                }
-            }
-
-            if (bestIdx > 0) {
-                PeerEntry* delegate = PeerTable::getEntryByIndex(bestIdx);
-                SqLog.printf("[gateway] Designating peer %02X:%02X:%02X:%02X:%02X:%02X as delegate\n",
-                    delegate->mac[0], delegate->mac[1], delegate->mac[2],
-                    delegate->mac[3], delegate->mac[4], delegate->mac[5]);
-
-                uint8_t ownMac[6];
-                esp_read_mac(ownMac, ESP_MAC_WIFI_STA);
-                SetupDelegateMsg msg = {};
-                msg.type = MSG_TYPE_SETUP_DELEGATE;
-                memcpy(msg.gateway_mac, ownMac, 6);
-                MeshConductor::sendToNode(delegate->mac, &msg, sizeof(msg));
-            } else {
-                // No alive peers — self-delegate
-                SqLog.println("[gateway] No alive peers, rebooting as delegate for setup");
-                rtc_state_t* rtc = RtcState::get();
-                rtc->next_role = (uint8_t)RoleId::DELEGATE;
-                RtcState::save();
-                vTaskDelay(pdMS_TO_TICKS(200));
-                esp_restart();
-            }
-        }
+        // No WiFi creds — user must press BOOT button to trigger delegation
+        SqLog.println("[gateway] No WiFi creds — press BOOT button to start delegation");
     }
 }
 
@@ -110,6 +164,13 @@ void Gateway::end() {
 
     if (s_gwHeartbeatTimer) {
         xTimerStop(s_gwHeartbeatTimer, 0);
+    }
+    if (s_scanContestTimer) {
+        xTimerStop(s_scanContestTimer, 0);
+        s_scanContestActive = false;
+    }
+    if (s_ticketTimer) {
+        xTimerStop(s_ticketTimer, 0);
     }
 
     Orchestrator::setMode(ORCH_OFF);
@@ -126,6 +187,24 @@ void Gateway::onPeerJoined(const uint8_t* mac) {
 
     // Peer will send heartbeat shortly — PeerTable entry created on first heartbeat.
     // If we want immediate FTM, queue the new node once it appears in PeerTable.
+
+    // Push WiFi creds to new peer so it can reconnect independently after reboot
+    if (SqWebServer::hasWifiCreds()) {
+        WifiCredsMsg msg = {};
+        msg.type = MSG_TYPE_WIFI_CREDS;
+        char ssid[33] = {}, pass[65] = {};
+        if (SqWebServer::loadWifiCreds(ssid, sizeof(ssid), pass, sizeof(pass))) {
+            strncpy(msg.ssid, ssid, 32);
+            strncpy(msg.password, pass, 64);
+            MeshConductor::sendToNode(mac, &msg, sizeof(msg));
+            SqLog.printf("[gateway] Pushed WiFi creds to new peer (SSID=%s)\n", ssid);
+        }
+    }
+
+    // Notify dashboard clients
+    if (SqWebServer::isRunning()) {
+        SqWebServer::broadcast("{\"type\":\"peer_join\"}");
+    }
 }
 
 void Gateway::onPeerLeft(const uint8_t* mac) {
@@ -137,6 +216,11 @@ void Gateway::onPeerLeft(const uint8_t* mac) {
     PeerEntry* e = PeerTable::getEntry(mac);
     if (e) {
         e->flags = PEER_STATUS_DEAD;
+    }
+
+    // Notify dashboard clients
+    if (SqWebServer::isRunning()) {
+        SqWebServer::broadcast("{\"type\":\"peer_leave\"}");
     }
 }
 
@@ -153,5 +237,118 @@ void Gateway::printStatus() {
     }
 
     Serial.printf("Peers: %u\n", m_peerCount);
+    Serial.printf("Scan contest: %s\n", s_scanContestActive ? "active" : "idle");
+    if (s_ticketRemaining > 0) {
+        Serial.printf("Delegate ticket: %02X:%02X:%02X:%02X:%02X:%02X (%us remaining)\n",
+            s_ticketMac[0], s_ticketMac[1], s_ticketMac[2],
+            s_ticketMac[3], s_ticketMac[4], s_ticketMac[5], s_ticketRemaining);
+    } else {
+        Serial.println("Delegate ticket: none");
+    }
     PeerTable::print();
+}
+
+void Gateway::startDelegation() {
+    if (s_scanContestActive) {
+        SqLog.println("[gateway] Scan contest already in progress");
+        return;
+    }
+    if (s_ticketRemaining > 0) {
+        SqLog.printf("[gateway] Delegate already active (%us remaining) — ignoring\n", s_ticketRemaining);
+        return;
+    }
+
+    int meshNodes = esp_mesh_get_total_node_num();
+    if (meshNodes <= 1) {
+        // Lone gateway — self-delegate
+        SqLog.println("[gateway] No peers — self-delegating");
+        rtc_state_t* rtc = RtcState::get();
+        rtc->next_role = (uint8_t)RoleId::DELEGATE;
+        RtcState::save();
+        vTaskDelay(pdMS_TO_TICKS(200));
+        esp_restart();
+        return;
+    }
+
+    // Broadcast scan request to all peers
+    SqLog.println("[gateway] Starting scan contest — requesting WiFi scans from peers");
+    s_scanResultCount = 0;
+    s_scanContestActive = true;
+
+    ScanRequestMsg req = {};
+    req.type = MSG_TYPE_SCAN_REQUEST;
+    MeshConductor::broadcastToAll(&req, sizeof(req));
+
+    // Start collection timeout (10s default)
+    if (s_scanContestTimer == nullptr) {
+        s_scanContestTimer = xTimerCreate("scanCtst", pdMS_TO_TICKS(10000),
+                                           pdFALSE, nullptr, scanContestTimeoutCb);
+    } else {
+        xTimerChangePeriod(s_scanContestTimer, pdMS_TO_TICKS(10000), 0);
+    }
+    xTimerStart(s_scanContestTimer, 0);
+}
+
+void Gateway::onScanResult(const uint8_t* mac, uint8_t ssid_count) {
+    if (!s_scanContestActive) return;
+
+    if (s_scanResultCount < MESH_MAX_NODES) {
+        memcpy(s_scanResults[s_scanResultCount].mac, mac, 6);
+        s_scanResults[s_scanResultCount].ssid_count = ssid_count;
+        s_scanResultCount++;
+        SqLog.printf("[gateway] Scan result from %02X:%02X:%02X:%02X:%02X:%02X: %d SSIDs\n",
+            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], ssid_count);
+    }
+
+    // Check if all peers have responded
+    int expected = esp_mesh_get_total_node_num() - 1;  // minus ourselves
+    if ((int)s_scanResultCount >= expected) {
+        // All in — stop timer and pick winner now
+        if (s_scanContestTimer) xTimerStop(s_scanContestTimer, 0);
+        scanContestTimeoutCb(nullptr);
+    }
+}
+
+bool Gateway::hasDelegateTicket() const {
+    return s_ticketRemaining > 0;
+}
+
+void Gateway::installTicket(const uint8_t* delegateMac, uint16_t remaining_s) {
+    if (remaining_s == 0) return;
+    memcpy(s_ticketMac, delegateMac, 6);
+    s_ticketRemaining = remaining_s;
+
+    rtc_state_t* rtc = RtcState::get();
+    memcpy(rtc->ticket_delegate_mac, delegateMac, 6);
+    rtc->ticket_remaining_s = remaining_s;
+    RtcState::save();
+
+    SqLog.printf("[gateway] Delegate ticket installed: %02X:%02X:%02X:%02X:%02X:%02X (%us)\n",
+        delegateMac[0], delegateMac[1], delegateMac[2],
+        delegateMac[3], delegateMac[4], delegateMac[5], remaining_s);
+}
+
+void Gateway::transferTicket(const uint8_t* newGwMac) {
+    if (s_ticketRemaining == 0) return;
+
+    DelegateTicketMsg msg = {};
+    msg.type = MSG_TYPE_DELEGATE_TICKET;
+    memcpy(msg.delegate_mac, s_ticketMac, 6);
+    msg.remaining_s = s_ticketRemaining;
+    MeshConductor::sendToNode(newGwMac, &msg, sizeof(msg));
+
+    SqLog.printf("[gateway] Delegate ticket transferred to new GW (%us remaining)\n",
+        s_ticketRemaining);
+}
+
+void Gateway::clearTicket() {
+    if (s_ticketRemaining == 0) return;
+    SqLog.println("[gateway] Delegate ticket cleared");
+    s_ticketRemaining = 0;
+    memset(s_ticketMac, 0, 6);
+
+    rtc_state_t* rtc = RtcState::get();
+    memset(rtc->ticket_delegate_mac, 0, 6);
+    rtc->ticket_remaining_s = 0;
+    RtcState::save();
 }

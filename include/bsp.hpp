@@ -53,10 +53,6 @@ constexpr gpio_num_t PIEZO_PIN_B = GPIO_NUM_23;  // push-pull complement
 
 // NvsConfigManager property defaults (override here to change factory values)
 #define NVS_DEFAULT_LEDS_ENABLED        true
-#define NVS_DEFAULT_ELECT_W_BATTERY     1.0f
-#define NVS_DEFAULT_ELECT_W_ADJACENCY   5.0f
-#define NVS_DEFAULT_ELECT_W_TENURE      8.0f
-#define NVS_DEFAULT_ELECT_W_LOWBAT_PEN  0.1f
 #define NVS_DEFAULT_CLR_INIT            0x00140600   // orange (20,6,0)
 #define NVS_DEFAULT_CLR_READY           0x00140F00   // yellow  (20,15,0)
 #define NVS_DEFAULT_CLR_GATEWAY         0x00000008   // dim blue   (0,10,15)
@@ -66,9 +62,8 @@ constexpr gpio_num_t PIEZO_PIN_B = GPIO_NUM_23;  // push-pull complement
 // Phase 2: Heartbeat
 #define NVS_DEFAULT_HB_INTERVAL_S      30
 #define NVS_DEFAULT_HB_STALE_MULT      3
-#define NVS_DEFAULT_REELECT_DELTA_MV   200
 #define NVS_DEFAULT_REELECT_COOLDOWN_S 60
-#define NVS_DEFAULT_REELECT_DETHRONE_MV 300
+#define NVS_DEFAULT_BATTERY_HYST_MV    300
 
 // Phase 2: FTM
 #define NVS_DEFAULT_FTM_STALE_S        300
@@ -96,21 +91,10 @@ constexpr gpio_num_t PIEZO_PIN_B = GPIO_NUM_23;  // push-pull complement
 #define MESH_CHANNEL         1
 #define MESH_MAX_LAYER       4
 
-// Election
-#define ELECT_BATTERY_FLOOR_MV  2900    // below this: heavy score penalty (not disqualifying)
-
-// Election timing
-#define ELECT_SETTLE_MS      3000    // wait for mesh to stabilize before election
-#define ELECT_TIMEOUT_MS     15000   // fallback: current root keeps Gateway
-
 // Mesh retry
 #define MESH_RETRY_DELAY_MS  2000
 #define MESH_MAX_RETRIES     10
 #define MESH_REELECT_SLEEP_MS 5000   // sleep before reboot on gateway loss
-
-// Self-promotion delay (prevents split meshes when Setup Delegate is away)
-#define MESH_PROMOTE_BASE_MS   10000   // minimum wait before self-promoting to root
-#define MESH_PROMOTE_JITTER_MS 10000   // MAC-based jitter added on top (total: 10-20s)
 
 // Fast-path boot
 #define NVS_DEFAULT_FAST_SCAN  5        // reduced scan wait (seconds) on fast-boot

@@ -6,14 +6,18 @@ from platformio.ini and PlatformIO build outputs — zero hardcoded constants.
 """
 
 import argparse
+import atexit
 import configparser
 import csv
+import ctypes
 import json
 import os
 import subprocess
 import sys
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -22,6 +26,94 @@ CONFIG_PATH = SCRIPT_DIR / "upload_all.config.json"
 
 # Lock for interleaved line output so port prefixes don't collide
 _print_lock = threading.Lock()
+
+
+class _TeeWriter:
+    """Duplicates writes to both the original stream and a log file.
+
+    Log lines are prefixed with elapsed milliseconds since start.
+    """
+    _t0 = time.perf_counter()
+
+    def __init__(self, original, log_file):
+        self._original = original
+        self._log = log_file
+        self._at_line_start = True
+
+    def write(self, text):
+        self._original.write(text)
+        # Prefix each line in the log with elapsed time
+        for ch in text:
+            if self._at_line_start and ch not in ("\r", "\n"):
+                ms = (time.perf_counter() - _TeeWriter._t0) * 1000
+                self._log.write(f"[{ms:10.1f}ms] ")
+                self._at_line_start = False
+            self._log.write(ch)
+            if ch == "\n":
+                self._at_line_start = True
+
+    def flush(self):
+        self._original.flush()
+        self._log.flush()
+
+    # Pass through any other attribute (encoding, fileno, etc.)
+    def __getattr__(self, name):
+        return getattr(self._original, name)
+
+# ---------------------------------------------------------------------------
+# Win32 Job Object — guarantees child processes die with the parent
+# ---------------------------------------------------------------------------
+_job = None
+
+if sys.platform == "win32":
+    _kernel32 = ctypes.windll.kernel32
+
+    class _JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ("PerProcessUserTimeLimit", ctypes.c_int64),
+            ("PerJobUserTimeLimit", ctypes.c_int64),
+            ("LimitFlags", ctypes.c_uint32),
+            ("MinimumWorkingSetSize", ctypes.c_size_t),
+            ("MaximumWorkingSetSize", ctypes.c_size_t),
+            ("ActiveProcessLimit", ctypes.c_uint32),
+            ("Affinity", ctypes.c_size_t),
+            ("PriorityClass", ctypes.c_uint32),
+            ("SchedulingClass", ctypes.c_uint32),
+        ]
+
+    class _IO_COUNTERS(ctypes.Structure):
+        _fields_ = [
+            ("ReadOperationCount", ctypes.c_uint64),
+            ("WriteOperationCount", ctypes.c_uint64),
+            ("OtherOperationCount", ctypes.c_uint64),
+            ("ReadTransferCount", ctypes.c_uint64),
+            ("WriteTransferCount", ctypes.c_uint64),
+            ("OtherTransferCount", ctypes.c_uint64),
+        ]
+
+    class _JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ("BasicLimitInformation", _JOBOBJECT_BASIC_LIMIT_INFORMATION),
+            ("IoInfo", _IO_COUNTERS),
+            ("ProcessMemoryLimit", ctypes.c_size_t),
+            ("JobMemoryLimit", ctypes.c_size_t),
+            ("PeakProcessMemoryUsed", ctypes.c_size_t),
+            ("PeakJobMemoryUsed", ctypes.c_size_t),
+        ]
+
+    _kernel32.CreateJobObjectW.restype = ctypes.c_void_p
+    _kernel32.AssignProcessToJobObject.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    _kernel32.AssignProcessToJobObject.restype = ctypes.c_bool
+    _kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+
+    _job = _kernel32.CreateJobObjectW(None, None)
+    if _job:
+        _info = _JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+        _info.BasicLimitInformation.LimitFlags = 0x2000  # KILL_ON_JOB_CLOSE
+        _kernel32.SetInformationJobObject(
+            _job, 9, ctypes.byref(_info), ctypes.sizeof(_info),
+        )
+        atexit.register(_kernel32.CloseHandle, _job)
 
 
 def load_config():
@@ -40,13 +132,19 @@ def load_config():
     return cfg
 
 
+_ini_cache = None
+
 def _read_ini():
-    """Read and return the parsed platformio.ini ConfigParser."""
+    """Read and return the parsed platformio.ini ConfigParser (cached)."""
+    global _ini_cache
+    if _ini_cache is not None:
+        return _ini_cache
     ini_path = PROJECT_DIR / "platformio.ini"
     if not ini_path.exists():
         sys.exit(f"ERROR: platformio.ini not found at {ini_path}")
     cp = configparser.ConfigParser()
     cp.read(str(ini_path))
+    _ini_cache = cp
     return cp
 
 
@@ -207,7 +305,7 @@ def _stream_binary_pipe(pipe, prefix):
     """
     buf = b""
     while True:
-        chunk = pipe.read(256)
+        chunk = pipe.read1(256)
         if not chunk:
             break
         buf += chunk
@@ -250,6 +348,9 @@ def _run_esptool(cfg, port, chip, esptool_args):
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
         )
+        # Assign to Job Object so Windows kills it if we die
+        if _job and sys.platform == "win32":
+            _kernel32.AssignProcessToJobObject(_job, int(proc._handle))
         _stream_binary_pipe(proc.stdout, port)
         rc = proc.wait(timeout=120)
         if rc == 0:
@@ -258,8 +359,16 @@ def _run_esptool(cfg, port, chip, esptool_args):
             return (port, False, f"exit code {rc}")
     except subprocess.TimeoutExpired:
         proc.kill()
+        proc.stdout.close()
+        proc.wait()  # reap the zombie
         return (port, False, "Timed out after 120s")
     except Exception as e:
+        try:
+            proc.kill()
+            proc.stdout.close()
+            proc.wait()
+        except Exception:
+            pass
         return (port, False, str(e))
 
 
@@ -268,21 +377,35 @@ def erase_port(cfg, port, chip):
     return _run_esptool(cfg, port, chip, ["erase_flash"])
 
 
-def flash_port(cfg, port, chip, flash_pairs):
+def flash_port(cfg, port, chip, flash_pairs, no_reset=False):
     """Flash all offset+file pairs to a single port in one write_flash call."""
-    esptool_args = ["write_flash"]
+    esptool_args = []
+    if no_reset:
+        esptool_args += ["--after", "no_reset"]
+    esptool_args += ["write_flash"]
     for offset, filepath in flash_pairs:
         esptool_args += [offset, filepath]
     return _run_esptool(cfg, port, chip, esptool_args)
 
 
-def _run_parallel(desc, func, ports, *args):
-    """Run func(port, *args) in parallel across ports, print results, return counts."""
+def simultaneous_boot(cfg, ports, chip):
+    """Reboot all boards simultaneously via esptool chip_id.
+
+    After flashing with --after no_reset, boards sit in the bootloader.
+    A chip_id read reconnects and the default --after hard_reset reboots them.
+    """
+    _run_parallel("BOOTING",
+                  lambda port: _run_esptool(cfg, port, chip, ["chip_id"]),
+                  ports)
+
+
+def _run_parallel(desc, func, ports):
+    """Run func(port) in parallel across ports, print results, return counts."""
     print(f"\n>> {desc} {len(ports)} port(s): {', '.join(ports)}")
     results = []
     with ThreadPoolExecutor(max_workers=len(ports)) as pool:
         futures = {
-            pool.submit(func, port, *args): port
+            pool.submit(func, port): port
             for port in ports
         }
         for future in as_completed(futures):
@@ -293,6 +416,19 @@ def _run_parallel(desc, func, ports, *args):
     passed = sum(1 for _, ok, _ in results if ok)
     failed = len(results) - passed
     return passed, failed
+
+
+def _setup_logging():
+    """Tee stdout/stderr to a timestamped log file in tools/logs/."""
+    log_dir = SCRIPT_DIR / "logs"
+    log_dir.mkdir(exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_path = log_dir / f"upload_{stamp}.log"
+    log_file = open(log_path, "w", encoding="utf-8")
+    sys.stdout = _TeeWriter(sys.stdout, log_file)
+    sys.stderr = _TeeWriter(sys.stderr, log_file)
+    atexit.register(log_file.close)
+    return log_path
 
 
 def main():
@@ -324,6 +460,10 @@ def main():
         help="Upload LittleFS image to targets"
     )
     parser.add_argument(
+        "-nb", "--no-boot", action="store_true",
+        help="Let each board reboot individually (default: synchronized reboot)"
+    )
+    parser.add_argument(
         "ports", nargs="*", metavar="COMx",
         help="Serial ports to flash"
     )
@@ -333,6 +473,9 @@ def main():
     if not args.ports:
         parser.print_help()
         sys.exit(1)
+
+    log_path = _setup_logging()
+    print(f">> LOG: {log_path}")
 
     # --full implies everything
     if args.full:
@@ -379,11 +522,16 @@ def main():
             sys.exit(f"ERROR: Erase failed on {f} port(s), aborting.")
 
     # ── Flash all files in one write_flash call ──
+    sync_boot = not args.no_boot
     p, f = _run_parallel("FLASHING",
-                         lambda port: flash_port(cfg, port, chip, flash_pairs),
+                         lambda port: flash_port(cfg, port, chip, flash_pairs, sync_boot),
                          args.ports)
     total_passed += p
     total_failed += f
+
+    # ── Simultaneous reboot ──
+    if sync_boot and not total_failed:
+        simultaneous_boot(cfg, args.ports, chip)
 
     # ── Summary ──
     print(f"\n>> DONE: {total_passed} succeeded, {total_failed} failed")

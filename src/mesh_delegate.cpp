@@ -80,16 +80,17 @@ static void connectTask(void*) {
     }
 
     if (connected) {
-        esp_wifi_disconnect();
         SqWebServer::saveWifiCreds(s_pendingSsid, s_pendingPass);
         s_connState = CONN_OK;
 
-        // Let the page poll one more time to see CONN_OK, then clean up
-        vTaskDelay(pdMS_TO_TICKS(2000));
-
-        // Stop web server + AP to avoid rts error spam during shutdown
-        SqWebServer::stopDNS();
-        if (s_server) { s_server->end(); }
+        // Tear down SoftAP FIRST — deauth phone before touching STA,
+        // otherwise SoftAP tries to TX on a conflicted channel → (tx)rts errors
+        esp_wifi_deauth_sta(0);             // deauth all SoftAP clients (aid=0 = all)
+        vTaskDelay(pdMS_TO_TICKS(100));     // let deauth frame reach phone
+        SqWebServer::stopDNS();             // DNS redirect
+        if (s_server) { s_server->end(); }  // web server
+        esp_wifi_disconnect();              // STA from router
+        vTaskDelay(pdMS_TO_TICKS(100));     // brief settle
         esp_wifi_stop();
 
         rtc_state_t* rtc = RtcState::get();
@@ -99,6 +100,9 @@ static void connectTask(void*) {
         esp_restart();
     } else {
         ESP_LOGW(TAG, "Router connection failed");
+        // Deauth phone before STA disconnect to avoid (tx)rts error spam
+        esp_wifi_deauth_sta(0);
+        vTaskDelay(pdMS_TO_TICKS(100));
         esp_wifi_disconnect();
         esp_wifi_set_mode(WIFI_MODE_AP);
         s_connState = CONN_FAIL;
@@ -152,6 +156,7 @@ static void doWiFiScan() {
     s_scanCount = 0;
     for (uint16_t i = 0; i < fetchCount && s_scanCount < MAX_SCAN_RESULTS; i++) {
         if (records[i].ssid[0] == '\0') continue;  // skip hidden
+        if (strncmp((const char*)records[i].ssid, "Squeek_Config_", 14) == 0) continue;
 
         // Check for duplicate SSID
         bool dup = false;
@@ -441,6 +446,14 @@ void Delegate::onPeerJoined(const uint8_t* mac) {
 
 void Delegate::onPeerLeft(const uint8_t* mac) {
     (void)mac;  // no mesh active in delegate mode
+}
+
+bool Delegate::hasClient() {
+    wifi_sta_list_t sta_list = {};
+    if (esp_wifi_ap_get_sta_list(&sta_list) == ESP_OK) {
+        return sta_list.num > 0;
+    }
+    return false;
 }
 
 void Delegate::printStatus() {

@@ -5,6 +5,7 @@
 #include "audio_engine.h"
 #include "tone_library.h"
 #include "nvs_config.h"
+#include "web_server.h"
 #include "sq_log.h"
 #include <Arduino.h>
 #include <freertos/FreeRTOS.h>
@@ -460,6 +461,11 @@ void Orchestrator::setMode(OrchMode mode) {
     }
 
     SqLog.printf("[orch] Mode set to %s\n", modeName(mode));
+
+    // Notify dashboard clients
+    if (SqWebServer::isRunning()) {
+        SqWebServer::broadcastOrchState();
+    }
 }
 
 OrchMode Orchestrator::getMode() {

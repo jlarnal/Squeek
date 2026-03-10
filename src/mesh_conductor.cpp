@@ -31,7 +31,7 @@ static const char* TAG = "mesh";
 static IMeshRole*  s_role           = nullptr;
 static bool        s_connected      = false;
 static bool        s_started        = false;
-static bool        s_electionDone   = false;
+static bool        s_roleAssigned   = false;
 static uint8_t     s_meshId[6]      = { 0x53, 0x51, 0x45, 0x45, 0x4B, 0x00 }; // "SQUEEK"
 // Role objects are now heap-allocated via MeshConductor::setRole()
 // (no more static Gateway/MeshNode — reboot switches role)
@@ -43,20 +43,89 @@ static uint8_t       s_peerShadowCount = 0;
 // Gateway MAC — all nodes track this for heartbeat routing
 static uint8_t       s_gatewayMac[6] = {0};
 
-// Election state
+// Bug 3: Cred push ACK flag — set when ACK received, checked in push loop
+static volatile bool s_credAckReceived = false;
+
+// Mesh state
 static uint8_t     s_parentRetries  = 0;
-static TimerHandle_t s_electTimer   = nullptr;
-static TimerHandle_t s_settleTimer  = nullptr;
-static TimerHandle_t s_promoteTimer = nullptr;
-static TaskHandle_t  s_electTaskHandle = nullptr;
-static ElectionScore s_scores[MESH_MAX_NODES];
-static uint8_t     s_scoreCount     = 0;
 static uint16_t    s_gwTenure       = 0;        // cached from NVS
-static bool        s_fastBoot       = false;
+static bool        s_hasRouterCreds = false;     // true when real WiFi creds loaded
 
-// BOOT button — force gateway promotion
-static void promoteTimerCb(TimerHandle_t t);  // forward decl
+// Routerless bootstrap: one-shot timer to self-elect as root
+static TimerHandle_t s_bootstrapTimer = nullptr;
 
+static void assignRoleFromMeshState();  // forward decl for bootstrapTimerCb
+
+// Channel lock — stop continuous scanning after mesh forms
+static void lockChannel() {
+    uint8_t primary = 0;
+    wifi_second_chan_t secondary;
+    if (esp_wifi_get_channel(&primary, &secondary) == ESP_OK && primary > 0) {
+        mesh_cfg_t cfg;
+        esp_mesh_get_config(&cfg);
+        if (cfg.channel != primary) {
+            cfg.channel = primary;
+            esp_mesh_set_config(&cfg);
+            SqLog.printf("[mesh] Channel locked to %d\n", primary);
+        }
+    }
+}
+
+// Routerless bootstrap: self-elect as root after deterministic timeout
+// Uses MAC-based delay so the lowest-MAC node wins the race every time.
+static void bootstrapTimerCb(TimerHandle_t timer) {
+    xTimerDelete(timer, 0);
+    s_bootstrapTimer = nullptr;
+
+    if (s_connected || esp_mesh_is_root()) return;  // already resolved
+
+    SqLog.println("[mesh] Bootstrap timeout — self-electing as root");
+    esp_err_t err = esp_mesh_set_type(MESH_ROOT);
+    if (err != ESP_OK) {
+        SqLog.printf("[mesh] set_type(ROOT) failed: %s\n", esp_err_to_name(err));
+        return;
+    }
+
+    // In routerless mode, PARENT_CONNECTED won't fire, so assign role directly
+    if (!s_roleAssigned) {
+        assignRoleFromMeshState();
+    }
+}
+
+// Compute a deterministic bootstrap delay from the node's MAC address.
+// Lower MAC hash → shorter delay → that node becomes root first.
+// Range: 10-60s, spread by FNV-1a hash of MAC.
+static uint32_t macBasedBootstrapDelay() {
+    uint8_t mac[6];
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+
+    // FNV-1a hash of MAC → uniform distribution
+    uint32_t h = 2166136261u;
+    for (int i = 0; i < 6; i++) {
+        h ^= mac[i];
+        h *= 16777619u;
+    }
+
+    // Map to 5-30s range
+    return 5000 + (h % 25001);
+}
+
+// Schedule the bootstrap timer (if appropriate).
+// Called once from start(), before NO_PARENT_FOUND ever fires.
+static void scheduleBootstrapTimer() {
+    if (s_hasRouterCreds || s_bootstrapTimer) return;  // not routerless, or already scheduled
+
+    bool isDelegateReturn = RtcState::isValid() && RtcState::get()->delegate_active;
+    if (isDelegateReturn) return;  // returning delegate must rejoin, not self-promote
+
+    uint32_t delay = macBasedBootstrapDelay();
+    SqLog.printf("[mesh] Bootstrap timer: self-election in %lu ms (MAC-based)\n", delay);
+    s_bootstrapTimer = xTimerCreate("bootstrap", pdMS_TO_TICKS(delay),
+                                     pdFALSE, nullptr, bootstrapTimerCb);
+    if (s_bootstrapTimer) xTimerStart(s_bootstrapTimer, 0);
+}
+
+// BOOT button — routes to delegate (if gateway)
 static volatile uint32_t s_bootBtnLastEdge = 0;
 static volatile uint8_t  s_bootBtnEdges    = 0;
 
@@ -71,14 +140,14 @@ static void IRAM_ATTR bootButtonISR(void* arg) {
     s_bootBtnLastEdge = now;
 
     if (edges >= 2) {
-        // Two edges = one press-release cycle — force promote
+        // Two edges = one press-release cycle
         s_bootBtnEdges = 0;
         // Defer to timer service context (can't call mesh APIs from ISR)
         BaseType_t xHigherPriorityTaskWoken = pdFALSE;
         xTimerPendFunctionCallFromISR(
             [](void* p1, uint32_t p2) {
                 (void)p1; (void)p2;
-                promoteTimerCb(nullptr);
+                MeshConductor::onBootButton();
             },
             nullptr, 0, &xHigherPriorityTaskWoken);
         portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
@@ -89,10 +158,6 @@ static void IRAM_ATTR bootButtonISR(void* arg) {
 static SemaphoreHandle_t s_configRespSema = nullptr;
 static char              s_configRespBuf[480];
 static uint8_t           s_configRespReqId = 0;
-
-// Task-notification bits for the election task
-static constexpr uint32_t ELECT_NOTIFY_RUN     = (1u << 0);
-static constexpr uint32_t ELECT_NOTIFY_TIMEOUT = (1u << 1);
 
 // --- NVS tenure helpers ---
 
@@ -122,7 +187,7 @@ static void updateRtcState() {
 
     mesh_addr_t routing_table[MESH_MAX_NODES];
     int table_size = 0;
-    esp_mesh_get_routing_table(routing_table, MESH_MAX_NODES, &table_size);
+    esp_mesh_get_routing_table(routing_table, sizeof(routing_table), &table_size);
 
     uint8_t own_mac[6];
     esp_read_mac(own_mac, ESP_MAC_WIFI_STA);
@@ -145,253 +210,71 @@ static void updateRtcState() {
     RtcState::save();
 }
 
-// --- Election logic ---
+// --- Root-observation role assignment ---
+// Whoever is ESP-MESH root IS the Gateway. No election overlay.
 
-double MeshConductor::computeScore() {
-    uint16_t battery = (uint16_t)PowerManager::batteryMv();
-    uint8_t own_mac[6];
-    esp_read_mac(own_mac, ESP_MAC_WIFI_STA);
+static void assignRoleFromMeshState() {
+    bool amRoot = esp_mesh_is_root();
+    RoleId target = amRoot ? RoleId::GATEWAY : RoleId::PEER;
 
-    // Peer count from routing table
-    mesh_addr_t routing_table[MESH_MAX_NODES];
-    int table_size = 0;
-    esp_mesh_get_routing_table(routing_table, MESH_MAX_NODES, &table_size);
-    uint8_t peers = (table_size > 1) ? (uint8_t)(table_size - 1) : 0;
+    // Already in the correct role — nothing to do
+    if (s_role && s_role->roleId() == target) {
+        s_roleAssigned = true;
+        return;
+    }
 
-    // MAC tiebreaker: last 2 bytes, scaled small so it never outweighs real factors
-    double mac_tb = (double)(((uint16_t)own_mac[4] << 8) | own_mac[5]) / 65536.0;
+    // Role mismatch (role was pre-assigned by fast-path boot but mesh state differs) — reboot
+    if (s_role) {
+        SqLog.printf("[mesh] Role mismatch — rebooting into %s\n",
+            amRoot ? "GATEWAY" : "PEER");
+        rtc_state_t* rtc = RtcState::get();
+        rtc->next_role = (uint8_t)target;
+        RtcState::save();
+        vTaskDelay(pdMS_TO_TICKS(200));
+        esp_restart();
+        return;
+    }
 
-    double score = (double)battery    * (float)NvsConfigManager::electWBattery
-                 + (double)peers      * (float)NvsConfigManager::electWAdjacency
-                 - (double)s_gwTenure * (float)NvsConfigManager::electWTenure
-                 + mac_tb;
-
-    // Below battery floor: heavy penalty, but not disqualifying
-    if (battery < ELECT_BATTERY_FLOOR_MV)
-        score *= (float)NvsConfigManager::electWLowbatPenalty;
-
-    return score;
-}
-
-static void buildOwnScore(ElectionScore* out) {
-    uint8_t own_mac[6];
-    esp_read_mac(own_mac, ESP_MAC_WIFI_STA);
-
-    mesh_addr_t routing_table[MESH_MAX_NODES];
-    int table_size = 0;
-    esp_mesh_get_routing_table(routing_table, MESH_MAX_NODES, &table_size);
-
-    out->type          = MSG_TYPE_ELECTION;
-    memcpy(out->mac, own_mac, 6);
-    out->battery_mv    = (uint16_t)PowerManager::batteryMv();
-    out->peer_count    = (table_size > 1) ? (uint8_t)(table_size - 1) : 0;
-    out->gateway_tenure = s_gwTenure;
-    out->score         = MeshConductor::computeScore();
-}
-
-static void assignRole(const uint8_t* winnerMac) {
-    uint8_t own_mac[6];
-    esp_read_mac(own_mac, ESP_MAC_WIFI_STA);
-
-    memcpy(s_gatewayMac, winnerMac, 6);
-
-    bool iAmWinner = (memcmp(own_mac, winnerMac, 6) == 0);
-
-    if (iAmWinner) {
+    // First assignment — instantiate role
+    s_roleAssigned = true;
+    if (amRoot) {
+        s_connected = true;  // Root is "connected" even without a router
         s_gwTenure++;
         nvsWriteTenure();
-        SqLog.println("[mesh] Role assigned: GATEWAY");
-    } else {
-        SqLog.printf("[mesh] Role assigned: NODE (gateway=%02X:%02X:%02X:%02X:%02X:%02X)\n",
-            winnerMac[0], winnerMac[1], winnerMac[2],
-            winnerMac[3], winnerMac[4], winnerMac[5]);
-    }
-
-    RoleId target = iAmWinner ? RoleId::GATEWAY : RoleId::PEER;
-
-    // If already in the correct role, just continue
-    if (s_role && s_role->roleId() == target) {
-        s_electionDone = true;
-        updateRtcState();
-        return;
-    }
-
-    // If no role yet (first election after boot), instantiate directly
-    if (!s_role) {
-        s_electionDone = true;
-        s_role = (target == RoleId::GATEWAY)
-            ? static_cast<IMeshRole*>(new Gateway())
-            : static_cast<IMeshRole*>(new MeshNode());
-        s_role->begin();
-        updateRtcState();
-        return;
-    }
-
-    // Role actually changed — reboot into it
-    rtc_state_t* rtc = RtcState::get();
-    rtc->next_role = (uint8_t)target;
-    RtcState::save();
-
-    SqLog.printf("[mesh] Role changed — rebooting into %s\n",
-        target == RoleId::GATEWAY ? "GATEWAY" : "PEER");
-    vTaskDelay(pdMS_TO_TICKS(200));
-    esp_restart();
-}
-
-static const uint8_t* pickWinner() {
-    if (s_scoreCount == 0) return nullptr;
-
-    // Highest score wins (low-battery penalty is already baked in)
-    uint8_t best = 0;
-    for (uint8_t i = 1; i < s_scoreCount; i++) {
-        if (s_scores[i].score > s_scores[best].score) {
-            best = i;
-        } else if (s_scores[i].score == s_scores[best].score) {
-            // Exact tie: highest MAC wins
-            if (memcmp(s_scores[i].mac, s_scores[best].mac, 6) > 0)
-                best = i;
-        }
-    }
-    return s_scores[best].mac;
-}
-
-// Called by the election timer or when single-node fallback triggers
-static void electionTimerCallback(TimerHandle_t xTimer) {
-    (void)xTimer;
-
-    if (s_electionDone) return;
-
-    // Non-root that timed out without collecting all scores → accept peer role
-    if (!esp_mesh_is_root()) {
-        int totalNodes = esp_mesh_get_total_node_num();
-        if ((int)s_scoreCount < totalNodes) {
-            SqLog.println("[mesh] Election timeout (non-root) — accepting peer role");
-            if (s_role && s_role->roleId() != RoleId::PEER) {
-                // Was a different role — reboot to switch
-                rtc_state_t* rtc = RtcState::get();
-                rtc->next_role = (uint8_t)RoleId::PEER;
-                RtcState::save();
-                esp_restart();
-            }
-            if (!s_role) {
-                s_role = new MeshNode();
-                s_role->begin();
-                updateRtcState();
-            }
-            s_electionDone = true;
-            return;
-        }
-    }
-
-    // Add own score if not already present
-    bool selfPresent = false;
-    uint8_t own_mac[6];
-    esp_read_mac(own_mac, ESP_MAC_WIFI_STA);
-    for (uint8_t i = 0; i < s_scoreCount; i++) {
-        if (memcmp(s_scores[i].mac, own_mac, 6) == 0) {
-            selfPresent = true;
-            break;
-        }
-    }
-    if (!selfPresent && s_scoreCount < MESH_MAX_NODES) {
-        buildOwnScore(&s_scores[s_scoreCount++]);
-    }
-
-    SqLog.printf("[mesh] Election: %d candidates\n", s_scoreCount);
-    for (uint8_t i = 0; i < s_scoreCount; i++) {
-        SqLog.printf("[mesh]   %02X:%02X:%02X:%02X:%02X:%02X  bat=%umV peers=%u tenure=%u score=%.1f\n",
-            s_scores[i].mac[0], s_scores[i].mac[1], s_scores[i].mac[2],
-            s_scores[i].mac[3], s_scores[i].mac[4], s_scores[i].mac[5],
-            s_scores[i].battery_mv, s_scores[i].peer_count,
-            s_scores[i].gateway_tenure, s_scores[i].score);
-    }
-
-    const uint8_t* winner = pickWinner();
-    if (winner) {
-        SqLog.printf("[mesh] Election winner: %02X:%02X:%02X:%02X:%02X:%02X\n",
-            winner[0], winner[1], winner[2], winner[3], winner[4], winner[5]);
-
-        // Check if ESP-IDF root matches election winner
-        if (esp_mesh_is_root() && memcmp(own_mac, winner, 6) != 0) {
-            // We are root but not the winner — waive root to winner
-            mesh_vote_t vote;
-            vote.percentage = 0.8f;
-            vote.is_rc_specified = true;
-            memcpy(vote.config.rc_addr.addr, winner, 6);
-            SqLog.println("[mesh] Waiving root to election winner...");
-            esp_mesh_waive_root(&vote, MESH_VOTE_REASON_ROOT_INITIATED);
-            // Role will be assigned after root migration completes
-            // For now, assign as node; if migration fails, timeout will reassign
-            assignRole(winner);
-        } else {
-            assignRole(winner);
-        }
-    } else {
-        // Fallback: current root stays as gateway
-        SqLog.println("[mesh] Election fallback: current root keeps gateway");
-        if (esp_mesh_is_root()) {
-            assignRole(own_mac);
-        } else {
-            // We're not root and got no scores — become node
-            if (!s_role) {
-                s_role = new MeshNode();
-                s_role->begin();
-                updateRtcState();
-            }
-            s_electionDone = true;
-        }
-    }
-}
-
-void MeshConductor::runElection() {
-    if (s_electionDone) return;
-
-    s_scoreCount = 0;
-
-    // Broadcast own score to root (or to all if we are root)
-    ElectionScore myScore;
-    buildOwnScore(&myScore);
-
-    // Store own score locally
-    if (s_scoreCount < MESH_MAX_NODES) {
-        s_scores[s_scoreCount++] = myScore;
-    }
-
-    // Check total nodes in mesh
-    int totalNodes = esp_mesh_get_total_node_num();
-
-    if (totalNodes <= 1) {
-        // Single node — instant self-election
-        SqLog.println("[mesh] Single node — self-electing as Gateway");
+        SqLog.println("[mesh] Role assigned: GATEWAY (I am root)");
         uint8_t own_mac[6];
         esp_read_mac(own_mac, ESP_MAC_WIFI_STA);
-        assignRole(own_mac);
-        return;
-    }
-
-    // Send score to mesh root
-    mesh_data_t data;
-    data.data = (uint8_t*)&myScore;
-    data.size = sizeof(myScore);
-    data.proto = MESH_PROTO_BIN;
-    data.tos = MESH_TOS_P2P;
-
-    if (esp_mesh_is_root()) {
-        // We are root: broadcast request for scores to all children
-        // Children will send their scores up; we collect them
-        // For now, send our own score as a broadcast so children know election is underway
-        mesh_addr_t bcast;
-        memset(&bcast, 0xFF, sizeof(bcast));  // broadcast
-        esp_mesh_send(&bcast, &data, MESH_DATA_P2P, NULL, 0);
+        memcpy(s_gatewayMac, own_mac, 6);
+        // Don't lockChannel() here — routerless root must keep scanning
+        // so ESP-MESH can detect dual-root situations. Channel gets locked
+        // on PARENT_CONNECTED (routed) or CHANNEL_SWITCH events.
     } else {
-        // Send score to root
-        esp_mesh_send(NULL, &data, MESH_DATA_TODS, NULL, 0);
+        SqLog.println("[mesh] Role assigned: NODE (not root)");
     }
 
-    // Stop settle timer (election is now active) and start election timeout
-    if (s_settleTimer) xTimerStop(s_settleTimer, 0);
-    xTimerChangePeriod(s_electTimer, pdMS_TO_TICKS(ELECT_TIMEOUT_MS), 0);
+    s_role = amRoot
+        ? static_cast<IMeshRole*>(new Gateway())
+        : static_cast<IMeshRole*>(new MeshNode());
+    s_role->begin();
+    updateRtcState();
+
+    // Enable FTM Responder on the mesh SoftAP so peers can range to us.
+    // Done here (not in MESH_EVENT_STARTED) because the AP interface isn't
+    // fully configured by ESP-MESH until the node has joined the topology.
+    {
+        wifi_config_t ap_cfg = {};
+        esp_wifi_get_config(WIFI_IF_AP, &ap_cfg);
+        ap_cfg.ap.ftm_responder = true;
+        esp_err_t ftm_err = esp_wifi_set_config(WIFI_IF_AP, &ap_cfg);
+        if (ftm_err == ESP_OK) {
+            SqLog.println("[mesh] FTM Responder enabled on SoftAP");
+        } else {
+            SqLog.printf("[mesh] WARNING: Failed to enable FTM Responder: %s\n",
+                esp_err_to_name(ftm_err));
+        }
+    }
 }
+
 
 // --- Mesh data receive task ---
 
@@ -409,59 +292,6 @@ static void meshRxTask(void* pvParameters) {
             vTaskDelay(pdMS_TO_TICKS(100));
             continue;
         }
-
-        if (data.size >= 1 && rx_buf[0] == MSG_TYPE_ELECTION) {
-            if (data.size >= sizeof(ElectionScore) && !s_electionDone) {
-                ElectionScore* incoming = (ElectionScore*)rx_buf;
-
-                // Check for duplicate
-                bool dup = false;
-                for (uint8_t i = 0; i < s_scoreCount; i++) {
-                    if (memcmp(s_scores[i].mac, incoming->mac, 6) == 0) {
-                        dup = true;
-                        break;
-                    }
-                }
-                if (!dup && s_scoreCount < MESH_MAX_NODES) {
-                    s_scores[s_scoreCount++] = *incoming;
-                    SqLog.printf("[mesh] Received election score from %02X:%02X:%02X:%02X:%02X:%02X score=%.1f\n",
-                        incoming->mac[0], incoming->mac[1], incoming->mac[2],
-                        incoming->mac[3], incoming->mac[4], incoming->mac[5],
-                        incoming->score);
-
-                    // If we are root, check if we have all scores
-                    if (esp_mesh_is_root()) {
-                        int totalNodes = esp_mesh_get_total_node_num();
-                        if ((int)s_scoreCount >= totalNodes) {
-                            // All scores collected — broadcast results and decide
-                            // Send all scores to every node
-                            for (uint8_t i = 0; i < s_scoreCount; i++) {
-                                mesh_data_t bcast_data;
-                                bcast_data.data = (uint8_t*)&s_scores[i];
-                                bcast_data.size = sizeof(ElectionScore);
-                                bcast_data.proto = MESH_PROTO_BIN;
-                                bcast_data.tos = MESH_TOS_P2P;
-                                mesh_addr_t bcast;
-                                memset(&bcast, 0xFF, sizeof(bcast));
-                                esp_mesh_send(&bcast, &bcast_data, MESH_DATA_P2P, NULL, 0);
-                            }
-                            // Cancel timeout and decide now
-                            if (s_electTimer) xTimerStop(s_electTimer, 0);
-                            electionTimerCallback(nullptr);
-                        }
-                    } else {
-                        // Non-root: check if we have enough scores to decide
-                        int totalNodes = esp_mesh_get_total_node_num();
-                        if ((int)s_scoreCount >= totalNodes && !s_electionDone) {
-                            if (s_electTimer) xTimerStop(s_electTimer, 0);
-                            electionTimerCallback(nullptr);
-                        }
-                    }
-                }
-            }
-        }
-
-        // --- Phase 2 message dispatch ---
 
         if (data.size >= 1) {
             uint8_t msgType = rx_buf[0];
@@ -587,43 +417,6 @@ static void meshRxTask(void* pvParameters) {
                     xSemaphoreGive(s_configRespSema);
                 }
             }
-            else if (msgType == MSG_TYPE_ROLE_CHANGE && data.size >= sizeof(RoleChangeMsg)) {
-                RoleChangeMsg* rc = (RoleChangeMsg*)rx_buf;
-                uint8_t own_mac[6];
-                esp_read_mac(own_mac, ESP_MAC_WIFI_STA);
-
-                SqLog.printf("[mesh] ROLE_CHANGE: new gateway=%02X:%02X:%02X:%02X:%02X:%02X\n",
-                    rc->new_gw[0], rc->new_gw[1], rc->new_gw[2],
-                    rc->new_gw[3], rc->new_gw[4], rc->new_gw[5]);
-
-                memcpy(s_gatewayMac, rc->new_gw, 6);
-
-                if (memcmp(own_mac, rc->new_gw, 6) == 0) {
-                    SqLog.println("[mesh] I am the new gateway — rebooting!");
-                    rtc_state_t* rtc = RtcState::get();
-                    rtc->next_role = (uint8_t)RoleId::GATEWAY;
-                    RtcState::save();
-                    vTaskDelay(pdMS_TO_TICKS(200));
-                    esp_restart();
-                } else {
-                    if (s_role && s_role->roleId() == RoleId::GATEWAY) {
-                        rtc_state_t* rtc = RtcState::get();
-                        rtc->next_role = (uint8_t)RoleId::PEER;
-                        RtcState::save();
-                        vTaskDelay(pdMS_TO_TICKS(200));
-                        esp_restart();
-                    }
-                }
-            }
-            else if (msgType == MSG_TYPE_NOMINATE && data.size >= sizeof(NominateMsg)) {
-                NominateMsg* nom = (NominateMsg*)rx_buf;
-                if (s_role && s_role->roleId() == RoleId::GATEWAY) {
-                    SqLog.printf("[mesh] NOMINATE received from %02X:%02X:%02X:%02X:%02X:%02X\n",
-                        nom->mac[0], nom->mac[1], nom->mac[2],
-                        nom->mac[3], nom->mac[4], nom->mac[5]);
-                    MeshConductor::nominateNode(nom->mac);
-                }
-            }
             // Phase 4: Orchestrator messages
             else if (msgType == MSG_TYPE_PLAY_CMD && data.size >= sizeof(PlayCmdMsg)) {
                 PlayCmdMsg* play = (PlayCmdMsg*)rx_buf;
@@ -642,15 +435,72 @@ static void meshRxTask(void* pvParameters) {
                 WifiCredsMsg* wc = (WifiCredsMsg*)rx_buf;
                 wc->ssid[32] = '\0';      // safety null-terminate
                 wc->password[64] = '\0';
-                SqWebServer::saveWifiCreds(wc->ssid, wc->password);
-                SqLog.printf("[mesh] Received WiFi credentials (SSID=%s)\n", wc->ssid);
-                // Send ACK back
+
+                // Only save if creds are new or changed
+                char curSsid[33] = {}, curPass[65] = {};
+                bool haveCreds = SqWebServer::loadWifiCreds(curSsid, sizeof(curSsid), curPass, sizeof(curPass));
+                bool credsChanged = !haveCreds || strcmp(curSsid, wc->ssid) != 0 || strcmp(curPass, wc->password) != 0;
+                if (credsChanged) {
+                    SqWebServer::saveWifiCreds(wc->ssid, wc->password);
+                    SqLog.printf("[mesh] Saved WiFi credentials (SSID=%s)\n", wc->ssid);
+                } else {
+                    SqLog.printf("[mesh] WiFi credentials unchanged (SSID=%s)\n", wc->ssid);
+                }
+
+                if (esp_mesh_is_root()) {
+                    // Start web server if not running
+                    if (!SqWebServer::isRunning()) {
+                        SqLog.println("[mesh] Starting web server with new credentials");
+                        SqWebServer::start();
+                    }
+                    // Broadcast new/changed creds to all peers
+                    if (credsChanged) {
+                        SqLog.println("[mesh] Broadcasting WiFi credentials to all peers");
+                        MeshConductor::broadcastToAll(wc, sizeof(WifiCredsMsg));
+                    }
+
+                    // Creds are in NVS + broadcast to peers. Reboot to apply —
+                    // esp_mesh_set_config() is unreliable at runtime, and we can't
+                    // call esp_mesh_stop() from meshRxTask (kills our own stack).
+                    // Defer the reboot via timer so meshRxTask can exit cleanly.
+                    if (credsChanged) {
+                        SqLog.println("[mesh] Router creds saved — rebooting in 2s to apply");
+                        TimerHandle_t t = xTimerCreate("gwReboot", pdMS_TO_TICKS(2000),
+                            pdFALSE, nullptr, [](TimerHandle_t timer) {
+                                xTimerDelete(timer, 0);
+                                esp_restart();
+                            });
+                        if (t) xTimerStart(t, 0);
+                    }
+                }
+
+                // Non-root: update local mesh config with router creds
+                // (survive root loss, can find router independently on next boot)
+                if (!esp_mesh_is_root() && credsChanged) {
+                    esp_mesh_set_self_organized(false, false);
+
+                    mesh_cfg_t meshCfg;
+                    esp_mesh_get_config(&meshCfg);
+                    memset(meshCfg.router.ssid, 0, sizeof(meshCfg.router.ssid));
+                    memcpy(meshCfg.router.ssid, wc->ssid, strlen(wc->ssid));
+                    meshCfg.router.ssid_len = strlen(wc->ssid);
+                    memset(meshCfg.router.password, 0, sizeof(meshCfg.router.password));
+                    memcpy(meshCfg.router.password, wc->password, strlen(wc->password));
+                    esp_mesh_set_config(&meshCfg);
+                    s_hasRouterCreds = true;
+                    SqLog.println("[mesh] Updated local mesh config with router creds");
+
+                    // Re-enable — peer stays connected to parent
+                    esp_mesh_set_self_organized(true, false);
+                }
+
+                // Send ACK back to sender (not sendToRoot — we ARE root)
                 WifiCredsAckMsg ack = { .type = MSG_TYPE_WIFI_CREDS_ACK };
-                MeshConductor::sendToRoot(&ack, sizeof(ack));
+                MeshConductor::sendToNode(from.addr, &ack, sizeof(ack));
             }
             else if (msgType == MSG_TYPE_WIFI_CREDS_ACK) {
                 SqLog.println("[mesh] WiFi credentials ACK received");
-                // TODO: mark peer as creds-received (stop retrying)
+                s_credAckReceived = true;
             }
             else if (msgType == MSG_TYPE_MERGE_CHECK && data.size >= sizeof(MergeCheckMsg)) {
                 MergeCheckMsg* mc = (MergeCheckMsg*)rx_buf;
@@ -676,6 +526,64 @@ static void meshRxTask(void* pvParameters) {
             else if (msgType == MSG_TYPE_DELEGATE_RESULT && data.size >= sizeof(DelegateResultMsg)) {
                 DelegateResultMsg* dr = (DelegateResultMsg*)rx_buf;
                 SqLog.printf("[mesh] Delegate result: %s\n", dr->success ? "creds obtained" : "failed");
+                // Clear delegate ticket — delegate has returned
+                if (s_role && s_role->roleId() == RoleId::GATEWAY) {
+                    static_cast<Gateway*>(s_role)->clearTicket();
+                }
+            }
+            else if (msgType == MSG_TYPE_DELEGATE_TICKET && data.size >= sizeof(DelegateTicketMsg)) {
+                DelegateTicketMsg* dt = (DelegateTicketMsg*)rx_buf;
+                SqLog.printf("[mesh] Received delegate ticket: %02X:..:%02X (%us)\n",
+                    dt->delegate_mac[0], dt->delegate_mac[5], dt->remaining_s);
+                // Store in RTC — new gateway will pick it up after reboot
+                rtc_state_t* rtc = RtcState::get();
+                memcpy(rtc->ticket_delegate_mac, dt->delegate_mac, 6);
+                rtc->ticket_remaining_s = dt->remaining_s;
+                RtcState::save();
+                // If already running as gateway, install immediately
+                if (s_role && s_role->roleId() == RoleId::GATEWAY) {
+                    static_cast<Gateway*>(s_role)->installTicket(dt->delegate_mac, dt->remaining_s);
+                }
+                // Send ACK
+                DelegateTicketMsg ack = {};  // reuse struct, only type matters
+                ack.type = MSG_TYPE_DELEGATE_TICKET_ACK;
+                MeshConductor::sendToRoot(&ack, sizeof(ack));
+            }
+            else if (msgType == MSG_TYPE_DELEGATE_TICKET_ACK) {
+                SqLog.println("[mesh] Delegate ticket ACK received");
+            }
+            else if (msgType == MSG_TYPE_SCAN_REQUEST) {
+                // Peer: run WiFi scan and report SSID count back to gateway
+                SqLog.println("[mesh] Scan request received — scanning WiFi");
+                wifi_scan_config_t scanCfg = {};
+                scanCfg.show_hidden = false;
+                scanCfg.scan_type = WIFI_SCAN_TYPE_ACTIVE;
+                scanCfg.scan_time.active.min = 100;
+                scanCfg.scan_time.active.max = 300;
+                esp_err_t err = esp_wifi_scan_start(&scanCfg, true);  // blocking
+                uint16_t apCount = 0;
+                if (err == ESP_OK) {
+                    esp_wifi_scan_get_ap_num(&apCount);
+                    esp_wifi_clear_ap_list();  // free scan memory
+                } else {
+                    SqLog.printf("[mesh] Scan failed: %s\n", esp_err_to_name(err));
+                }
+                SqLog.printf("[mesh] Scan complete: %d APs found\n", apCount);
+
+                uint8_t ownMac[6];
+                esp_read_mac(ownMac, ESP_MAC_WIFI_STA);
+                ScanResultMsg res = {};
+                res.type = MSG_TYPE_SCAN_RESULT;
+                memcpy(res.mac, ownMac, 6);
+                res.ssid_count = (apCount > 255) ? 255 : (uint8_t)apCount;
+                MeshConductor::sendToRoot(&res, sizeof(res));
+            }
+            else if (msgType == MSG_TYPE_SCAN_RESULT && data.size >= sizeof(ScanResultMsg)) {
+                ScanResultMsg* sr = (ScanResultMsg*)rx_buf;
+                if (s_role && s_role->roleId() == RoleId::GATEWAY) {
+                    Gateway* gw = static_cast<Gateway*>(s_role);
+                    gw->onScanResult(sr->mac, sr->ssid_count);
+                }
             }
         }
 
@@ -686,49 +594,6 @@ static void meshRxTask(void* pvParameters) {
     vTaskDelete(nullptr);
 }
 
-// --- Election task: runs heavy election logic with a proper stack ---
-
-static void electTask(void* pvParameters) {
-    (void)pvParameters;
-    uint32_t bits;
-    for (;;) {
-        if (xTaskNotifyWait(0, UINT32_MAX, &bits, portMAX_DELAY) == pdTRUE) {
-            if (bits & ELECT_NOTIFY_RUN)
-                MeshConductor::runElection();
-            if (bits & ELECT_NOTIFY_TIMEOUT)
-                electionTimerCallback(nullptr);
-        }
-    }
-}
-
-// --- Settle timer: debounced election trigger ---
-
-static void startSettleTimer() {
-    if (s_electTimer) xTimerStop(s_electTimer, 0);
-    xTimerChangePeriod(s_settleTimer, pdMS_TO_TICKS(ELECT_SETTLE_MS), 0);
-}
-
-// --- Promote timer callback (routerless root self-connect) ---
-
-static void promoteTimerCb(TimerHandle_t t) {
-    (void)t;
-    if (s_connected || esp_mesh_is_root()) return;
-
-    SqLog.println("[mesh] Self-promoting to root (no existing mesh)");
-    esp_mesh_set_type(MESH_ROOT);
-    esp_mesh_set_self_organized(true, false);  // re-enable so children can join
-
-    // Routerless root has no upstream parent, so PARENT_CONNECTED won't fire.
-    // Manually mark connected and kick off the election.
-    s_connected = true;
-    s_parentRetries = 0;
-    updateRtcState();
-
-    if (!s_electionDone) {
-        startSettleTimer();
-    }
-}
-
 // --- Event handler ---
 
 static void meshEventHandler(void* arg, esp_event_base_t event_base,
@@ -737,20 +602,6 @@ static void meshEventHandler(void* arg, esp_event_base_t event_base,
     case MESH_EVENT_STARTED:
         SqLog.println("[mesh] Mesh started");
         s_started = true;
-
-        // Enable FTM Responder on the mesh SoftAP so peers can range to us
-        {
-            wifi_config_t ap_cfg = {};
-            esp_wifi_get_config(WIFI_IF_AP, &ap_cfg);
-            ap_cfg.ap.ftm_responder = true;
-            esp_err_t ftm_err = esp_wifi_set_config(WIFI_IF_AP, &ap_cfg);
-            if (ftm_err == ESP_OK) {
-                SqLog.println("[mesh] FTM Responder enabled on SoftAP");
-            } else {
-                SqLog.printf("[mesh] WARNING: Failed to enable FTM Responder: %s\n",
-                    esp_err_to_name(ftm_err));
-            }
-        }
 
         // Start RX task
         xTaskCreateUniversal(meshRxTask, "meshRx", 4096, nullptr,
@@ -764,10 +615,15 @@ static void meshEventHandler(void* arg, esp_event_base_t event_base,
         break;
 
     case MESH_EVENT_PARENT_CONNECTED: {
-        if (s_promoteTimer) xTimerStop(s_promoteTimer, 0);
         SqLog.println("[mesh] Parent connected");
         s_connected = true;
         s_parentRetries = 0;
+        if (s_bootstrapTimer) {
+            xTimerStop(s_bootstrapTimer, 0);
+            xTimerDelete(s_bootstrapTimer, 0);
+            s_bootstrapTimer = nullptr;
+        }
+        lockChannel();  // Stop continuous scanning — mesh channel is known
         if (esp_mesh_is_root()) {
             SqLog.println("[mesh] I am ROOT");
             // Root is connected to the router — start DHCP to get a STA IP
@@ -796,21 +652,42 @@ static void meshEventHandler(void* arg, esp_event_base_t event_base,
             }
         }
 
-        // Start election after settle delay
-        if (!s_electionDone) {
-            startSettleTimer();
+        // Assign role based on mesh state (root = gateway)
+        if (!s_roleAssigned) {
+            assignRoleFromMeshState();
         }
         break;
     }
 
-    case MESH_EVENT_PARENT_DISCONNECTED:
-        SqLog.println("[mesh] Parent disconnected");
+    case MESH_EVENT_PARENT_DISCONNECTED: {
+        mesh_event_disconnected_t* disc = (mesh_event_disconnected_t*)event_data;
+
+        // Root losing its upstream router is not a mesh disconnect — the mesh
+        // is still alive with children connected. Only non-root nodes treat
+        // parent disconnect as a real mesh disconnection.
+        if (esp_mesh_is_root()) {
+            // Suppress spam when routerless — no creds means nothing to connect to
+            if (s_hasRouterCreds) {
+                SqLog.printf("[mesh] Root lost router connection (reason=%d)\n", disc->reason);
+            }
+            break;
+        }
+
+        SqLog.printf("[mesh] Parent disconnected reason=%d\n", disc->reason);
+
         s_connected = false;
         updateRtcState();
+        // reason=8 (ASSOC_LEAVE) is a voluntary mesh parent switch — the mesh
+        // stack will reconnect automatically. Don't treat it as gateway loss.
+        if (disc->reason == WIFI_REASON_ASSOC_LEAVE) {
+            SqLog.println("[mesh] Parent switch in progress — waiting for reconnect");
+            break;
+        }
         if (s_role && s_role->roleId() == RoleId::PEER) {
             static_cast<MeshNode*>(s_role)->onGatewayLost();
         }
         break;
+    }
 
     case MESH_EVENT_CHILD_CONNECTED: {
         mesh_event_child_connected_t* child = (mesh_event_child_connected_t*)event_data;
@@ -819,22 +696,14 @@ static void meshEventHandler(void* arg, esp_event_base_t event_base,
             child->mac[3], child->mac[4], child->mac[5]);
         if (s_role) s_role->onPeerJoined(child->mac);
         updateRtcState();
-
-        // Re-run election so the new child can participate
-        if (s_electionDone && esp_mesh_is_root()) {
-            SqLog.println("[mesh] Child joined after election — re-electing");
-            s_electionDone = false;
-            s_scoreCount = 0;
-            startSettleTimer();
-        }
         break;
     }
 
     case MESH_EVENT_CHILD_DISCONNECTED: {
         mesh_event_child_disconnected_t* child = (mesh_event_child_disconnected_t*)event_data;
-        SqLog.printf("[mesh] Child disconnected: %02X:%02X:%02X:%02X:%02X:%02X\n",
+        SqLog.printf("[mesh] Child disconnected: %02X:%02X:%02X:%02X:%02X:%02X reason=%u\n",
             child->mac[0], child->mac[1], child->mac[2],
-            child->mac[3], child->mac[4], child->mac[5]);
+            child->mac[3], child->mac[4], child->mac[5], child->reason);
         if (s_role) s_role->onPeerLeft(child->mac);
         updateRtcState();
         break;
@@ -858,33 +727,49 @@ static void meshEventHandler(void* arg, esp_event_base_t event_base,
 
     case MESH_EVENT_NO_PARENT_FOUND:
         s_parentRetries++;
-        if (!esp_mesh_is_root()) {
-            // Only schedule the promote timer once — don't reset it on every scan failure
-            if (s_promoteTimer == nullptr) {
-                uint8_t mac[6];
-                esp_read_mac(mac, ESP_MAC_WIFI_STA);
-                uint32_t jitter = MESH_PROMOTE_BASE_MS + (((mac[4] << 8) | mac[5]) % MESH_PROMOTE_JITTER_MS);
-                SqLog.printf("[mesh] Scheduling root promotion in %u ms\n", jitter);
-                s_promoteTimer = xTimerCreate("promote",
-                    pdMS_TO_TICKS(jitter),
-                    pdFALSE, nullptr, promoteTimerCb);
-                xTimerStart(s_promoteTimer, 0);
-            }
-        } else {
-            if (s_parentRetries >= MESH_MAX_RETRIES) {
-                SqLog.println("[mesh] Root with no children — rebooting");
-                MeshConductor::stop();
-                SQ_LIGHT_SLEEP(MESH_REELECT_SLEEP_MS);
-                esp_restart();
-            }
+        SqLog.printf("[mesh] No parent found (attempt %u)\n", s_parentRetries);
+
+        // Bootstrap timer is already running from start() — nothing to schedule here.
+
+        // Root with real creds that can't reach router: reboot after retries
+        if (esp_mesh_is_root() && s_hasRouterCreds && s_parentRetries >= MESH_MAX_RETRIES) {
+            SqLog.println("[mesh] Root can't reach router — rebooting");
+            MeshConductor::stop();
+            SQ_LIGHT_SLEEP(MESH_REELECT_SLEEP_MS);
+            esp_restart();
         }
         break;
 
     case MESH_EVENT_ROOT_SWITCH_REQ: {
-        SqLog.println("[mesh] Root switch requested — accepting, becoming gateway");
-        uint8_t own_mac[6];
-        esp_read_mac(own_mac, ESP_MAC_WIFI_STA);
-        assignRole(own_mac);
+        SqLog.println("[mesh] Root switch requested — reassigning role from mesh state");
+        s_roleAssigned = false;
+        assignRoleFromMeshState();
+        break;
+    }
+
+    case MESH_EVENT_NETWORK_STATE: {
+        mesh_event_network_state_t* net = (mesh_event_network_state_t*)event_data;
+        SqLog.printf("[mesh] Network state: is_rootless=%d\n", net->is_rootless);
+        break;
+    }
+
+    case MESH_EVENT_CHANNEL_SWITCH: {
+        mesh_event_channel_switch_t* cs = (mesh_event_channel_switch_t*)event_data;
+        SqLog.printf("[mesh] Channel switch to %d\n", cs->channel);
+        lockChannel();  // Update locked channel after root-driven migration
+        break;
+    }
+
+    case MESH_EVENT_FIND_NETWORK: {
+        mesh_event_find_network_t* net = (mesh_event_find_network_t*)event_data;
+        SqLog.printf("[mesh] Found network on channel %d\n", net->channel);
+        // Cancel bootstrap timer — no need to self-elect, we found an existing mesh
+        if (s_bootstrapTimer) {
+            SqLog.println("[mesh] Cancelling bootstrap — found existing network");
+            xTimerStop(s_bootstrapTimer, 0);
+            xTimerDelete(s_bootstrapTimer, 0);
+            s_bootstrapTimer = nullptr;
+        }
         break;
     }
 
@@ -933,12 +818,11 @@ void MeshConductor::init() {
 
     // Initialize mesh
     ESP_ERROR_CHECK(esp_mesh_init());
-    ESP_ERROR_CHECK(esp_mesh_fix_root(true));   // disable RSSI-based root voting; Squeek election takes over
 
     ESP_ERROR_CHECK(esp_event_handler_register(MESH_EVENT, ESP_EVENT_ANY_ID,
                                                 &meshEventHandler, NULL));
 
-    // BOOT button (GPIO9) — press to force gateway self-promotion
+    // BOOT button (GPIO9) — gateway: delegate, disconnected: force root
     gpio_config_t btn_cfg = {};
     btn_cfg.pin_bit_mask = (1ULL << BOOT_BUTTON_PIN);
     btn_cfg.mode = GPIO_MODE_INPUT;
@@ -947,7 +831,7 @@ void MeshConductor::init() {
     gpio_config(&btn_cfg);
     gpio_install_isr_service(0);  // OK if already installed (ESP_ERR_INVALID_STATE)
     gpio_isr_handler_add(BOOT_BUTTON_PIN, bootButtonISR, nullptr);
-    SqLog.println("[mesh] BOOT button (GPIO9) — press to force promotion");
+    SqLog.println("[mesh] BOOT button (GPIO9) ready");
 }
 
 void MeshConductor::start() {
@@ -959,23 +843,31 @@ void MeshConductor::start() {
     s_meshStarting = true;
 
     mesh_cfg_t cfg = MESH_INIT_CONFIG_DEFAULT();
-    cfg.channel = MESH_CHANNEL;
     memcpy((uint8_t*)&cfg.mesh_id, s_meshId, 6);
 
     // Router config: populate with real creds if available, else placeholder
     memset(&cfg.router, 0, sizeof(cfg.router));
     {
         char ssid[33] = {}, pass[65] = {};
-        if (SqWebServer::loadWifiCreds(ssid, sizeof(ssid), pass, sizeof(pass))) {
+        bool credsInNvs = SqWebServer::loadWifiCreds(ssid, sizeof(ssid), pass, sizeof(pass));
+        bool suppressCreds = RtcState::isValid() && RtcState::get()->delegate_active;
+        s_hasRouterCreds = credsInNvs && !suppressCreds;
+        if (s_hasRouterCreds) {
             memcpy(cfg.router.ssid, ssid, strlen(ssid));
             cfg.router.ssid_len = strlen(ssid);
             memcpy(cfg.router.password, pass, strlen(pass));
-
-            // Channel 0 = scan all channels to find the router automatically
-            cfg.channel = 0;
             SqLog.printf("[mesh] Router config set: SSID=%s (auto-channel)\n", ssid);
+        } else if (suppressCreds) {
+            SqLog.println("[mesh] Suppressing router creds (delegate return — rejoin mesh first)");
         }
     }
+
+    // Channel selection:
+    //  - Router creds active: channel=0 (scan for router)
+    //  - Delegate return (creds suppressed): channel=0 (scan all channels for existing mesh)
+    //  - Routerless bootstrap: channel=1 (fixed so all nodes converge)
+    bool isDelegateReturn = RtcState::isValid() && RtcState::get()->delegate_active;
+    cfg.channel = (s_hasRouterCreds || isDelegateReturn) ? 0 : 1;
 
     // Mesh AP settings (no password for Phase 1)
     cfg.mesh_ap.max_connection = 6;
@@ -998,79 +890,69 @@ void MeshConductor::start() {
     ESP_ERROR_CHECK(esp_mesh_set_max_layer(MESH_MAX_LAYER));
     ESP_ERROR_CHECK(esp_mesh_set_self_organized(true, true));
 
-    // Create election task (runs heavy election logic off the timer stack)
-    if (s_electTaskHandle == nullptr) {
-        xTaskCreateUniversal(electTask, "elect", 4096, nullptr,
-                             tskIDLE_PRIORITY + 1, &s_electTaskHandle, tskNO_AFFINITY);
-    }
-
-    // Create election timers — callbacks are lightweight trampolines that
-    // notify the election task (timer service stack is too small for election logic)
-    if (s_settleTimer == nullptr) {
-        s_settleTimer = xTimerCreate("settle", pdMS_TO_TICKS(ELECT_SETTLE_MS),
-                                      pdFALSE, nullptr, [](TimerHandle_t t) {
-            (void)t;
-            if (s_electTaskHandle)
-                xTaskNotify(s_electTaskHandle, ELECT_NOTIFY_RUN, eSetBits);
-        });
-    }
-    if (s_electTimer == nullptr) {
-        s_electTimer = xTimerCreate("electTO", pdMS_TO_TICKS(ELECT_TIMEOUT_MS),
-                                     pdFALSE, nullptr, [](TimerHandle_t t) {
-            (void)t;
-            if (s_electTaskHandle)
-                xTaskNotify(s_electTaskHandle, ELECT_NOTIFY_TIMEOUT, eSetBits);
-        });
-    }
-
-    // Reset election state
-    // Don't reset s_role here — it may have been set by boot path
-    // s_role = nullptr;  // removed: boot path sets role from RtcState
-    s_electionDone = (s_role != nullptr);  // if role pre-assigned, skip election
-    s_scoreCount = 0;
+    // Reset state — don't reset s_role (may have been set by boot path)
+    s_roleAssigned = (s_role != nullptr);  // if role pre-assigned, skip assignment
     s_parentRetries = 0;
 
     ESP_ERROR_CHECK(esp_mesh_start());
     SqLog.println("[mesh] Mesh starting...");
 
-    // Fast-path: if RTC says we were gateway, schedule immediate self-promotion
-    // instead of waiting for 60+ mesh scans to trigger NO_PARENT_FOUND.
-    if (s_fastBoot && s_promoteTimer == nullptr) {
-        uint16_t delaySec = (uint16_t)NvsConfigManager::fastScanDelay_s;
-        if (delaySec < 1)  delaySec = 1;
-        if (delaySec > 60) delaySec = 60;
-        SqLog.printf("[mesh] Fast-boot: scheduling promotion in %u s\n", delaySec);
-        s_promoteTimer = xTimerCreate("promote",
-            pdMS_TO_TICKS(delaySec * 1000),
-            pdFALSE, nullptr, promoteTimerCb);
-        xTimerStart(s_promoteTimer, 0);
-        s_fastBoot = false;  // one-shot
+    // Suppress noisy ESP-MESH internal logs when routerless (reason=201 spam)
+    if (!s_hasRouterCreds) {
+        esp_log_level_set("mesh", ESP_LOG_WARN);
+        esp_log_level_set("wifi", ESP_LOG_WARN);
+    }
+
+    // Start bootstrap timer immediately — don't wait for NO_PARENT_FOUND (60 scans, ~3 min).
+    // MAC-based delay ensures deterministic root election order.
+    scheduleBootstrapTimer();
+}
+
+void MeshConductor::onBootButton() {
+    // Multi-purpose: depends on current state
+    if (s_role && s_role->roleId() == RoleId::GATEWAY) {
+        SqLog.println("[mesh] BOOT button — gateway: starting delegation");
+        static_cast<Gateway*>(s_role)->startDelegation();
+    } else if (!s_connected && !esp_mesh_is_root()) {
+        // Disconnected node — force self-election as root
+        SqLog.println("[mesh] BOOT button — forcing root self-election");
+        if (s_bootstrapTimer) {
+            xTimerStop(s_bootstrapTimer, 0);
+            xTimerDelete(s_bootstrapTimer, 0);
+            s_bootstrapTimer = nullptr;
+        }
+        esp_err_t err = esp_mesh_set_type(MESH_ROOT);
+        if (err != ESP_OK) {
+            SqLog.printf("[mesh] set_type(ROOT) failed: %s\n", esp_err_to_name(err));
+            return;
+        }
+        if (!s_roleAssigned) {
+            assignRoleFromMeshState();
+        }
+    } else {
+        SqLog.println("[mesh] BOOT button — ignored (connected peer)");
     }
 }
 
-void MeshConductor::setFastBoot(bool fast) {
-    s_fastBoot = fast;
-}
-
 void MeshConductor::stop() {
+    if (s_bootstrapTimer) {
+        xTimerStop(s_bootstrapTimer, 0);
+        xTimerDelete(s_bootstrapTimer, 0);
+        s_bootstrapTimer = nullptr;
+    }
     if (s_role) {
         s_role->end();
         delete s_role;
         s_role = nullptr;
     }
-    if (s_settleTimer) {
-        xTimerStop(s_settleTimer, 0);
-    }
-    if (s_promoteTimer) {
-        xTimerStop(s_promoteTimer, 0);
-    }
-    if (s_electTimer) {
-        xTimerStop(s_electTimer, 0);
-    }
     esp_mesh_stop();
     s_started = false;
     s_connected = false;
-    s_electionDone = false;
+    s_roleAssigned = false;
+}
+
+bool MeshConductor::isCredAckReceived() {
+    return s_credAckReceived;
 }
 
 bool MeshConductor::isConnected() {
@@ -1092,7 +974,7 @@ void MeshConductor::setRole(IMeshRole* role) {
     }
     s_role = role;
     if (s_role) {
-        s_electionDone = true;
+        s_roleAssigned = true;
         s_role->begin();
     }
 }
@@ -1102,12 +984,18 @@ void MeshConductor::printStatus() {
     Serial.printf("Started: %s\n", s_started ? "yes" : "no");
     Serial.printf("Connected: %s\n", s_connected ? "yes" : "no");
     Serial.printf("Is Root: %s\n", esp_mesh_is_root() ? "yes" : "no");
-    Serial.printf("Election done: %s\n", s_electionDone ? "yes" : "no");
+    Serial.printf("Role assigned: %s\n", s_roleAssigned ? "yes" : "no");
     const char* roleName = !s_role ? "none"
         : s_role->roleId() == RoleId::GATEWAY ? "GATEWAY"
         : s_role->roleId() == RoleId::DELEGATE ? "DELEGATE" : "NODE";
     Serial.printf("Role: %s\n", roleName);
     Serial.printf("Layer: %d\n", esp_mesh_get_layer());
+    {
+        uint8_t primary = 0;
+        wifi_second_chan_t secondary;
+        esp_wifi_get_channel(&primary, &secondary);
+        Serial.printf("Channel: %u\n", primary);
+    }
     Serial.printf("Gateway tenure: %u\n", s_gwTenure);
 
     int total = esp_mesh_get_total_node_num();
@@ -1115,7 +1003,7 @@ void MeshConductor::printStatus() {
 
     mesh_addr_t routing_table[MESH_MAX_NODES];
     int table_size = 0;
-    esp_mesh_get_routing_table(routing_table, MESH_MAX_NODES, &table_size);
+    esp_mesh_get_routing_table(routing_table, sizeof(routing_table), &table_size);
     Serial.printf("Routing table size: %d\n", table_size);
 
     for (int i = 0; i < table_size; i++) {
@@ -1156,79 +1044,47 @@ uint8_t MeshConductor::peerShadowCount() {
     return s_peerShadowCount;
 }
 
-void MeshConductor::nominateNode(const uint8_t* sta_mac) {
-    if (!s_role || s_role->roleId() != RoleId::GATEWAY) {
-        SqLog.println("[mesh] nominateNode: not gateway, ignoring");
-        return;
-    }
-
-    SqLog.printf("[mesh] ROLE_CHANGE → %02X:%02X:%02X:%02X:%02X:%02X\n",
-        sta_mac[0], sta_mac[1], sta_mac[2], sta_mac[3], sta_mac[4], sta_mac[5]);
-
-    // Broadcast ROLE_CHANGE to all peers (including the nominee)
-    RoleChangeMsg rc;
-    rc.type = MSG_TYPE_ROLE_CHANGE;
-    memcpy(rc.new_gw, sta_mac, 6);
-    broadcastToAll(&rc, sizeof(rc));
-
-    // Small delay so the message reaches all peers before we transition
-    vTaskDelay(pdMS_TO_TICKS(200));
-
-    // Update local gateway MAC and reboot as PEER
-    memcpy(s_gatewayMac, sta_mac, 6);
-    rtc_state_t* rtc = RtcState::get();
-    rtc->next_role = (uint8_t)RoleId::PEER;
-    RtcState::save();
-    SqLog.println("[mesh] Stepped down — rebooting as PEER");
-    vTaskDelay(pdMS_TO_TICKS(200));
-    esp_restart();
-}
-
 void MeshConductor::stepDown() {
     if (!s_role || s_role->roleId() != RoleId::GATEWAY) {
         Serial.println("Not gateway — cannot step down.");
         return;
     }
 
-    // Find best alive candidate (highest battery_mv, skip self at slot 0)
-    uint8_t bestIdx = 0;
-    uint16_t bestBat = 0;
-    uint8_t count = PeerTable::peerCount();
-    for (uint8_t i = 1; i < count; i++) {
-        PeerEntry* e = PeerTable::getEntryByIndex(i);
-        if (!e || (e->flags & PEER_STATUS_DEAD)) continue;
-        if (e->battery_mv > bestBat) {
-            bestBat = e->battery_mv;
-            bestIdx = i;
-        }
+    // Broadcast delegate ticket to all peers before waiving
+    // (we don't know who ESP-MESH will elect as new root)
+    Gateway* gw = static_cast<Gateway*>(s_role);
+    if (gw->hasDelegateTicket()) {
+        // Broadcast ticket to all peers so the new gateway picks it up
+        rtc_state_t* rtc = RtcState::get();
+        DelegateTicketMsg dt = {};
+        dt.type = MSG_TYPE_DELEGATE_TICKET;
+        memcpy(dt.delegate_mac, rtc->ticket_delegate_mac, 6);
+        dt.remaining_s = rtc->ticket_remaining_s;
+        broadcastToAll(&dt, sizeof(dt));
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 
-    if (bestIdx == 0) {
-        Serial.println("No alive peers to hand off gateway role.");
-        return;
+    SqLog.println("[mesh] Waiving root — ESP-MESH will re-elect");
+    esp_err_t err = esp_mesh_waive_root(nullptr, MESH_VOTE_REASON_ROOT_INITIATED);
+    if (err != ESP_OK) {
+        SqLog.printf("[mesh] waive_root failed: %s\n", esp_err_to_name(err));
     }
-
-    PeerEntry* candidate = PeerTable::getEntryByIndex(bestIdx);
-    Serial.printf("Stepping down, nominating %02X:%02X:%02X:%02X:%02X:%02X (%u mV)\n",
-        candidate->mac[0], candidate->mac[1], candidate->mac[2],
-        candidate->mac[3], candidate->mac[4], candidate->mac[5], candidate->battery_mv);
-
-    nominateNode(candidate->mac);
+    // MESH_EVENT_ROOT_SWITCH_REQ will fire → assignRoleFromMeshState() → reboot as PEER
 }
 
 // One-shot task to perform role transfer outside timer callback context
-static void reelectionTask(void* arg) {
+static void stepDownTask(void* arg) {
     (void)arg;
     MeshConductor::stepDown();
     vTaskDelete(nullptr);
 }
 
-void MeshConductor::forceReelection() {
-    SqLog.println("[mesh] Scheduling re-election (deferred to task context)...");
+void MeshConductor::requestStepDown() {
+    SqLog.println("[mesh] Scheduling step-down (deferred to task context)...");
     // stepDown() does heavy work (broadcast, role switch, logging) that
     // overflows the FreeRTOS timer service task stack.  Spawn a one-shot
     // task with enough stack to handle it safely.
-    xTaskCreate(reelectionTask, "reelect", 4096, nullptr, 5, nullptr);
+    xTaskCreate(stepDownTask, "stepdown", 4096, nullptr, 5, nullptr);
 }
 
 // --- Messaging helpers ---
@@ -1270,7 +1126,7 @@ esp_err_t MeshConductor::broadcastToAll(const void* data, uint16_t len) {
         // ESP-IDF root: use routing table for complete mesh coverage
         mesh_addr_t routing_table[MESH_MAX_NODES];
         int table_size = 0;
-        esp_mesh_get_routing_table(routing_table, MESH_MAX_NODES, &table_size);
+        esp_mesh_get_routing_table(routing_table, sizeof(routing_table), &table_size);
 
         for (int i = 0; i < table_size; i++) {
             if (memcmp(routing_table[i].addr, own_mac, 6) == 0) continue;

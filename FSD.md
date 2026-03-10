@@ -2,7 +2,7 @@
 
 ## Context
 
-Squeek is a pet toy and prank device built from a flotilla of identical ESP32-C6 SuperMini boards. The nodes form a self-healing WiFi mesh that uses FTM (Fine Timing Measurement) to determine their relative 3D positions without manual configuration. A smartphone or laptop controls the flotilla through a web UI served by an automatically elected gateway node. The spatial awareness enables sounds to "travel" across the physical space — a cat chases a squeak that runs from node to node following the real room layout.
+Squeek is a pet toy and prank device built from a flotilla of identical ESP32-C6 SuperMini boards. The nodes form a self-healing WiFi mesh that uses FTM (Fine Timing Measurement) to determine their relative 3D positions without manual configuration. A smartphone or laptop controls the flotilla through a web UI served by the gateway node (whichever node is ESP-MESH root). The spatial awareness enables sounds to "travel" across the physical space — a cat chases a squeak that runs from node to node following the real room layout.
 
 ---
 
@@ -25,18 +25,19 @@ Squeek is a pet toy and prank device built from a flotilla of identical ESP32-C6
 - Optional: voltage divider on GPIO2 or GPIO3 for battery ADC monitoring (user-soldered)
 
 ### Imported Arduino libraries
- -  `adafruit/Adafruit NeoPixel@^1.12` for obvious purposes
- -  `https://github.com/me-no-dev/AsyncTCP.git#master` for inteactive React/Preact web pages.
- -	`https://github.com/me-no-dev/ESPAsyncWebServer.git#master` for webservices. 
- -	`paulstoffregen/Time @ ^1.6.1  ` to allow for NTP. 
- -	LEDC PWM + GPTimer for procedural tone synthesis (no external library).
+ -  `adafruit/Adafruit NeoPixel@^1.12` for WS2812 RGB LED
+ -  `https://github.com/me-no-dev/AsyncTCP.git#master` for async TCP (used by ESPAsyncWebServer)
+ -	`https://github.com/me-no-dev/ESPAsyncWebServer.git#master` for web server (dashboard + delegate wizard)
+ -	`paulstoffregen/Time @ ^1.6.1` for NTP (future use)
+ -  `bblanchon/ArduinoJson@^7` for JSON serialization (config, REST API, mesh messages)
+ -	LEDC PWM + GPTimer for procedural tone synthesis (no external library)
 
 ### Pin Mapping (defined in `include/bsp.hpp`)
 | Symbol | GPIO | Purpose |
 |--------|------|---------|
 | `LED_BUILTIN` | GPIO15 | Status LED (via 1K resistor) |
 | `RBG_BUILTIN` | GPIO8 | WS2812 RGB LED |
-| TBD | GPIO2/3 | Battery voltage ADC (via voltage divider) |
+| `BATTERY_ADC_PIN` | GPIO2 | Battery voltage ADC (via voltage divider) |
 | `PIEZO_PIN_A` / `PIEZO_PIN_B` | GPIO22 / GPIO23 | Piezo buzzer (push-pull, opposed phases) |
 
 
@@ -61,11 +62,12 @@ Nodes use WiFi FTM to build a 3D spatial map of the flotilla without any manual 
 - No manual pairing or configuration required
 - All nodes run identical firmware
 
-### FR2 — Gateway Election
-- One node is elected as gateway (serves web UI, coordinates playback, schedules FTM)
-- If the gateway goes offline, another node is elected automatically
-- Gateway provides a WiFi SoftAP for the controller (smartphone/laptop) to connect
-- Election strategy: weighted score (battery + adjacency - tenure + MAC tiebreak), NVS-tunable weights, re-election on gateway loss (see Section 7.2)
+### FR2 — Gateway Role & WiFi Connectivity
+- The ESP-MESH root node automatically becomes the Squeek Gateway (serves web UI, coordinates playback, schedules FTM)
+- If the gateway goes offline, ESP-MESH promotes a new root; that node becomes gateway
+- The gateway connects to a WiFi router as STA and serves the web UI on its router-assigned IP; the ESP-MESH SoftAP is invisible to phones (mesh-specific IEs)
+- **Setup Delegate** pattern for first-time WiFi configuration: when the gateway has no stored WiFi credentials, it designates a peer (or itself if alone) to temporarily leave the mesh, run a `Squeek_Config_XXYY` SoftAP with a captive-portal WiFi wizard, collect credentials, reboot back into the mesh, and push credentials to the gateway via `MSG_TYPE_WIFI_CREDS`
+- Battery rotation: gateway periodically calls `requestStepDown()` to voluntarily yield root, spreading battery drain across nodes (see Section 7.2)
 
 ### FR3 — FTM Self-Localization
 - Nodes perform pairwise FTM ranging to estimate inter-node distances
@@ -77,9 +79,9 @@ Nodes use WiFi FTM to build a 3D spatial map of the flotilla without any manual 
 
 ### FR4 — Sound Playback
 - **Tone synthesis** via LEDC PWM + GPTimer — procedural chirps, squeaks, warbles, melodies
-- **Sample playback** — compressed audio clips (MP3) decoded via libhelix-mp3, stored in LittleFS
+- **Sample playback** (future) — compressed audio clips (MP3) decoded via libhelix-mp3, stored in LittleFS
 - **Audio output layer is modular:**
-  - Phase 1: piezo buzzer, push-pull via two GPIOs (doubled voltage swing)
+  - Current: piezo buzzer, push-pull via two GPIOs (doubled voltage swing)
   - Future: I2S DAC companion board
 
 ### FR5 — Play Modes
@@ -88,10 +90,11 @@ Nodes use WiFi FTM to build a 3D spatial map of the flotilla without any manual 
 - **Triggered sequences** — user-defined patterns of (node, sound, delay) tuples launched from web UI
 - **Scheduled triggers** — time-delayed or clock-based activation of the above 3 modes (for pranks or scheduled play times)
 
-### FR6 — Web UI (served by gateway)
+### FR6 — Web UI (served by gateway via router STA)
+- Gateway connects to a WiFi router and serves the dashboard on its router-assigned IP (e.g., `http://192.168.1.92/`)
 - Upload and manage sound samples
 - Visualize node topology map in 3D (from FTM data)
-- Design and trigger play sequences visually, taking advantage of the interactive 3D map as part of the UI to designate nodes and paths.
+- Design and trigger play sequences visually, taking advantage of the interactive 3D map as part of the UI to designate nodes and paths
 - Configure play modes, scheduling, and FTM frequency
 - Battery levels per node
 - Stealth mode toggle
@@ -109,7 +112,7 @@ Nodes use WiFi FTM to build a 3D spatial map of the flotilla without any manual 
 - **LEDs must be kept brief** to conserve battery — flash and off, no sustained illumination
 
 ### FR9 — Battery Monitoring
-- ADC reads battery voltage via high-impedance voltage divider on GPIO2 or GPIO3
+- ADC reads battery voltage via high-impedance voltage divider on GPIO2 (`BATTERY_ADC_PIN`)
 - Low-battery threshold triggers brief WS2812 warning color
 - Critical-battery triggers graceful mesh departure and deep sleep
 - Battery levels reported to gateway and visible in web UI
@@ -139,23 +142,23 @@ Each node maintains a local map of the mesh it belongs to, stored in two tiers:
 ### System Topology
 
 ```
-┌──────────────────────────────────────────────────────┐
-│                   Controller                         │
-│           (smartphone/laptop browser)                │
-│                       │                              │
-│                 WiFi SoftAP                          │
-│                       ▼                              │
-│   ┌──────────── Gateway Node ────────────────┐       │
-│   │ Web Server │ Coordinator │ FTM Scheduler │       │
-│   └──────────────────┬───────────────────────┘       │
-│            WiFi Mesh │                               │
-│         ┌────────────┼────────────┐                  │
-│         ▼            ▼            ▼                  │
-│    ┌─────────┐  ┌─────────┐     ┌─────────┐          │
-│    │ Node A  │  │ Node B  │ ... │ Node X  │          │
-│    │     ◄───────── FTM ─────────────►    │          │
-│    └─────────┘  └─────────┘     └─────────┘          │
-└──────────────────────────────────────────────────────┘
+                    Controller
+            (smartphone/laptop browser)
+                       │
+                  WiFi Router
+                       │
+              WiFi STA connection
+                       ▼
+    ┌──────────── Gateway Node ────────────────┐
+    │ Web Server │ Coordinator │ FTM Scheduler │
+    └──────────────────┬───────────────────────┘
+             WiFi Mesh │ (ESP-MESH SoftAP, invisible to phones)
+          ┌────────────┼────────────┐
+          ▼            ▼            ▼
+     ┌─────────┐  ┌─────────┐     ┌─────────┐
+     │ Node A  │  │ Node B  │ ... │ Node X  │
+     │     ◄───────── FTM ─────────────►    │
+     └─────────┘  └─────────┘     └─────────┘
 ```
 
 ### Node Operating Modes
@@ -178,13 +181,14 @@ Each node maintains a local map of the mesh it belongs to, stored in two tiers:
 | **LedDriver** | `led_driver.h/cpp` | Status + WS2812 RGB control, non-blocking blink task, master enable/disable |
 | **PowerManager** | `power_manager.h/cpp` | Battery ADC (calibrated), low/critical thresholds, sleep wrappers (static class) |
 | **RtcState** | `rtc_state.h/cpp` | Unified RTC state manager — mesh map + boot flags, `RTC_NOINIT_ATTR` with `esp_rom_crc32_le` CRC32 (survives soft resets, static class) |
-| **MeshConductor** | `mesh_conductor.h/cpp`, `mesh_gateway.cpp`, `mesh_node.cpp` | WiFi mesh join/heal, NVS-tunable weighted gateway election (`double` score), `IMeshRole` strategy (Gateway / MeshNode), message routing |
-| **Localization Engine** | `ftm_manager.h/cpp`, `position_solver.h/cpp` | FTM round scheduling, distance matrix, 3D position solver (trilateration/MDS) |
-| **Audio Engine** | `audio_engine.h/cpp`, `audio_tweeter.h/cpp`, `audio_i2s.h/cpp`, `tone_library.h/cpp`, `sample_player.h/cpp` | Modular: LEDC PWM tone synthesis + MP3 decode → abstract output (piezo driver / I2S driver) |
-| **Storage** | `storage_manager.h/cpp` | LittleFS: samples, node config, sequences, position cache |
+| **MeshConductor** | `mesh_conductor.h/cpp`, `mesh_gateway.cpp`, `mesh_node.cpp`, `mesh_delegate.h/cpp` | WiFi mesh join/heal, root-observation role assignment, `IMeshRole` strategy (Gateway / MeshNode / Delegate), message routing, battery-based `requestStepDown()`, Setup Delegate WiFi wizard |
+| **Localization Engine** | `ftm_manager.h/cpp`, `ftm_scheduler.h/cpp`, `position_solver.h/cpp`, `peer_table.h/cpp` | FTM round scheduling, distance matrix, 3D position solver (MDS + Kalman), PeerTable with heartbeat protocol |
+| **Audio Engine** | `audio_engine.h/cpp`, `audio_tweeter.h/cpp`, `audio_i2s.h/cpp` (stub), `tone_library.h/cpp`, `sample_player.h/cpp` (stub) | Modular: LEDC PWM tone synthesis → abstract output (piezo driver now / I2S driver future); MP3 decode future |
+| **Storage** | `storage_manager.h/cpp` | LittleFS: wizard HTML, dashboard assets, samples (future), config |
 | **Orchestrator** | `orchestrator.h/cpp`, `clock_sync.h/cpp` | Play modes, sequence execution, mesh clock sync, scheduling |
-| **Gateway Services** | `web_server.h/cpp` | Web server, SoftAP, REST API, UI assets (active on elected gateway only) |
-| **Stealth & OTA** | `stealth_manager.h/cpp`, `ota_manager.h/cpp` | Stealth mode (hide AP), OTA firmware updates |
+| **Gateway Services** | `web_server.h/cpp` | Web server on gateway (served via router STA IP), REST API, WebSocket broadcast, dashboard assets |
+| **NVS Config Registry** | `nvs_config_registry.h/cpp` | Remote config read/write on peer nodes via mesh messages (`MSG_TYPE_CONFIG_REQ/RESP`) |
+| **Stealth & OTA** | `stealth_manager.h/cpp` (stub), `ota_manager.h/cpp` (stub) | Stealth mode (hide AP), OTA firmware updates |
 | **Debug CLI** | `debug_cli.h/cpp` | Always-on serial CLI (FreeRTOS task), Tab-cycle command history, interactive tone player, orchestrator control |
 
 ### Node Lifecycle State Machine
@@ -203,7 +207,7 @@ BOOT → MESH_JOINING → LIGHT_SLEEP ←─────────────
                   [done]   [sequence done]              │
                        └───────┴───────────────────────┘
 
-GATEWAY_ELECTED (parallel role on one node):
+GATEWAY (root node assumes this role):
   MESH_ACTIVE + SERVING_UI + FTM_COORDINATOR
 
 STEALTH: like LIGHT_SLEEP but AP hidden,
@@ -219,15 +223,14 @@ LOW_BATTERY → DEEP_SLEEP (timer-only wake for periodic check)
 | Component | Library / API | Purpose |
 |-----------|--------------|---------|
 | Build system | PlatformIO + pioarduino platform | Dual Arduino + ESP-IDF |
-| WiFi Mesh | ESP-IDF WiFi Mesh (`esp_mesh`) | Self-healing mesh network |
+| WiFi Mesh | ESP-IDF WiFi Mesh (`esp_mesh`) | Self-healing mesh network (FIXED_ROOT mode) |
 | FTM | ESP-IDF FTM API (`esp_wifi_ftm`) | Pairwise ranging for localization |
 | Audio synthesis | LEDC + GPTimer | Procedural tone generation (chirps, squeaks, warbles) |
-| MP3 decode | chmorgan/esp-libhelix-mp3 | Compressed sample playback |
-| File system | joltwallet/littlefs | Sample storage, config, sequences |
-| LED | WS2812 driver (via GPIO8) | Visual status feedback |
-| Web server | ESP-IDF HTTP server or ESPAsyncWebServer | REST API + static UI assets |
-| DSP | espressif/esp-dsp | Signal processing for FTM/audio if needed |
-| JSON | espressif/json_generator + json_parser | API serialization |
+| MP3 decode | chmorgan/esp-libhelix-mp3 (future) | Compressed sample playback (not yet integrated) |
+| File system | joltwallet/littlefs | Wizard HTML, dashboard assets, config, samples (future) |
+| LED | Adafruit NeoPixel (via GPIO8) | WS2812 RGB visual status feedback |
+| Web server | ESPAsyncWebServer | REST API + WebSocket + static UI assets |
+| JSON | bblanchon/ArduinoJson@^7 | API serialization, config, mesh messages |
 
 ---
 
@@ -237,7 +240,7 @@ LOW_BATTERY → DEEP_SLEEP (timer-only wake for periodic check)
 **Goal:** Two or more nodes form a self-healing mesh and prove it works.
 
 - [x] WiFi mesh formation with auto-join (`MeshConductor::init/start`, ESP-IDF `esp_mesh`)
-- [x] Gateway election — weighted score: battery level, peer adjacency, tenure penalty, MAC tiebreak (`MeshConductor::runElection`, `ElectionScore` broadcast)
+- [x] Gateway role — root-observation: ESP-MESH root automatically becomes Squeek Gateway; battery rotation via `requestStepDown()`
 - [x] `IMeshRole` strategy pattern — `Gateway` and `MeshNode` concrete roles, swapped at runtime
 - [x] LedDriver with non-blocking FreeRTOS blink task, HSV/RGB, master enable/disable
 - [x] Battery voltage ADC via calibrated oneshot + voltage divider (`PowerManager`)
@@ -247,25 +250,29 @@ LOW_BATTERY → DEEP_SLEEP (timer-only wake for periodic check)
 - [x] Debug CLI — always-on serial CLI with 19 text commands, Tab-cycle history, interactive tone player
 - **Deliverable:** Scatter nodes, they find each other. Kill the gateway, another takes over. Serial CLI for hardware testing.
 
-### Phase 2 — FTM Localization
+### Phase 2 — FTM Localization  ✅ IMPLEMENTED
 **Goal:** Nodes know where they are in 3D space.
 
-- FTM initiator/responder implementation
-- Gateway-coordinated round-robin pair scheduling
-- Distance matrix construction from averaged RTT samples
-- 3D position solver (MDS or iterative trilateration)
-- Position data broadcast to all nodes + stored in IRAM mesh map
-- Serial/log output of 3D coordinate map
+- [x] PeerTable (IRAM working map, 16-node capacity, heartbeat-driven)
+- [x] Heartbeat protocol (`MSG_TYPE_HEARTBEAT`, 30s default, NVS-tunable)
+- [x] Battery-aware step-down via `esp_mesh_waive_root()` with absolute threshold (cooldown `reelCd` 60s, hysteresis `batHyst` 300mV)
+- [x] FtmManager (FTM initiator with 2σ outlier rejection)
+- [x] FtmScheduler (priority queue, wake/ready/go state machine, anchor+incremental scheduling)
+- [x] PositionSolver (classical MDS via power iteration + per-node diagonal Kalman filter, 1D/2D/3D adaptive)
+- [x] Position data broadcast to all nodes via `MSG_TYPE_POS_UPDATE`
+- [x] PeerSync broadcast (`MSG_TYPE_PEER_SYNC`) — gateway pushes peer table to all nodes
+- [x] 10 new NVS parameters (heartbeat, step-down, FTM)
+- [x] 7 new mesh message types (HEARTBEAT, FTM_WAKE/READY/GO/RESULT/CANCEL, POS_UPDATE, PEER_SYNC)
 - **Deliverable:** Nodes report their 3D positions. Move one, positions update.
 
-### Phase 3 — Audio Engine
+### Phase 3 — Audio Engine  ✅ VERIFIED
 **Goal:** Every node can make sound.
 
-- LEDC PWM tone engine with push-pull piezo output on GPIO22/GPIO23
-- GPTimer ISR at 200 Hz for envelope interpolation (fixed-point, no floats)
-- Procedural tone library: chirps, squeaks, warbles, alert, fade
-- Segment-sequence format: `{freq_start, freq_end, duty_start, duty_end, duration_ms}`
-- Modular audio output interface (`IAudioOutput` — piezo driver now, I2S driver later)
+- [x] LEDC PWM tone engine with push-pull piezo output on GPIO22/GPIO23
+- [x] GPTimer ISR at 200 Hz for envelope interpolation (fixed-point, no floats)
+- [x] Procedural tone library: 6 built-in tones (chirp, chirp_down, squeak, warble, alert, fade_chirp)
+- [x] Segment-sequence format: `{freq_start, freq_end, duty_start, duty_end, duration_ms}`
+- [x] Modular audio output interface (`IAudioOutput` — piezo driver now, I2S driver later)
 - MP3 sample decode via libhelix → piezo output (future)
 - LittleFS sample storage (upload via serial, future)
 - **Deliverable:** Node plays a chirp on command via `tone` CLI command.
@@ -285,17 +292,38 @@ LOW_BATTERY → DEEP_SLEEP (timer-only wake for periodic check)
 - [x] CLI `orch` command with 12 sub-commands (travel, random, seq list/add/clear/save/load/play, sched, stop, status)
 - **Deliverable:** Trigger "chase mode" — sound runs across nodes following physical layout.
 
-### Phase 5 — Web UI
+### Phase 5 — Web UI  🔧 IN PROGRESS
 **Goal:** Browser-based control from a phone.
 
-- Gateway serves SoftAP + captive portal style web UI
-- Embedded web assets (HTML/JS/CSS in LittleFS or PROGMEM)
+**Phase 5A — Infrastructure (implemented):**
+- [x] LittleFS for web assets (wizard.html.gz, dashboard.html.gz)
+- [x] `SqWebServer` static class — ESPAsyncWebServer on gateway, REST API, WebSocket broadcast
+- [x] DNS captive portal for delegate wizard (`SqWebServer::startDNS/stopDNS`)
+- [x] `StorageManager` — LittleFS mount, gzip-transparent file serving
+
+**Phase 5B — Setup Delegate & STA connectivity (implemented):**
+- [x] `Delegate` role (`IMeshRole` implementation) — leaves mesh, runs `Squeek_Config_XXYY` SoftAP with WiFi wizard
+- [x] WiFi scan → dropdown, connection test, credential save to NVS
+- [x] Credential propagation: delegate → gateway (`MSG_TYPE_WIFI_CREDS`), gateway → all peers on join + broadcast
+- [x] Credential ACK (`MSG_TYPE_WIFI_CREDS_ACK`) with early-exit in push loop
+- [x] Button-triggered delegation — BOOT button (GPIO9) on gateway initiates scan contest + delegation (no automatic delegation)
+- [x] Scan contest — `MSG_TYPE_SCAN_REQUEST` / `MSG_TYPE_SCAN_RESULT` — peers report visible SSID count, best peer becomes delegate
+- [x] Delegate ticket — gateway tracks delegate MAC + monotonic `remaining_s` countdown (never rolls back, floors at zero)
+- [x] Step-down suppression while delegate ticket is active; ticket transfer via `MSG_TYPE_DELEGATE_TICKET` / `MSG_TYPE_DELEGATE_TICKET_ACK` on gateway handoff
+- [x] MAC-jittered backoff on gateway loss (5–15s), delegate reboot race fix
+- [x] `cfg.channel = 0` — routerless nodes scan all channels to find routed meshes
+- [x] Fast-path boot from RTC state (GATEWAY/PEER/DELEGATE roles)
+- [x] `MSG_TYPE_SETUP_DELEGATE` / `MSG_TYPE_DELEGATE_RESULT` / `MSG_TYPE_MERGE_CHECK`
+- [x] WiFi scan filters out other `Squeek_Config_*` SSIDs
+- [x] LED blinks 4x faster when a client connects to the delegate SoftAP
+
+**Phase 5C — Dashboard (not started):**
 - REST API: node list, position map, sound library, trigger play, upload samples
 - Visual 3D topology map showing node positions (from FTM data)
 - Sequence designer: build play patterns visually
 - Schedule configuration
 - Battery levels per node
-- **Deliverable:** Connect phone to Squeek AP, open browser, see the map, trigger a chase.
+- **Deliverable:** Connect phone to same WiFi as gateway, open browser at gateway IP, see the map, trigger a chase.
 
 ### Phase 6 — Stealth & Polish
 **Goal:** Prank-ready, power-optimized, robust.
@@ -318,7 +346,7 @@ LOW_BATTERY → DEEP_SLEEP (timer-only wake for periodic check)
 | `platformio.ini` | Build config, dual Arduino + ESP-IDF framework, board definition, library deps |
 | `sdkconfig.defaults` | ESP-IDF defaults (FreeRTOS tick, flash, Arduino autostart) |
 | `sdkconfig.esp32c6-supermini` | Board-specific SDK config |
-| `src/CMakeLists.txt` | ESP-IDF component registration — lists all 22 source files |
+| `src/CMakeLists.txt` | ESP-IDF component registration — lists all 26 source files |
 
 ### Core Infrastructure (implemented)
 
@@ -336,27 +364,27 @@ LOW_BATTERY → DEEP_SLEEP (timer-only wake for periodic check)
 | `include/rtc_state.h` | `RtcState` static class + `rtc_state_t` struct — unified RTC state (mesh map + boot flags) | Done |
 | `src/rtc_state.cpp` | CRC32 save/restore via `esp_rom_crc32_le`, `RTC_NOINIT_ATTR` storage (survives soft resets), init/clear/print | Done |
 | `include/debug_cli.h` | Debug CLI entry point declaration | Done |
-| `src/debug_cli.cpp` | Always-on serial CLI task, 18 commands, Tab-cycle history, interactive tone player | Done |
+| `src/debug_cli.cpp` | Always-on serial CLI task, 19+ commands, Tab-cycle history, interactive tone player | Done |
 
-### Phase 1 — Mesh & Election (implemented)
+### Phase 1 — Mesh & Role Assignment (implemented)
 
 | File | Purpose | Status |
 |------|---------|--------|
-| `include/mesh_conductor.h` | `MeshConductor` static orchestrator, `IMeshRole` interface, `Gateway` / `MeshNode` classes, `ElectionScore` packet | Done |
-| `src/mesh_conductor.cpp` | WiFi mesh init, ESP-IDF mesh event handler, weighted election (battery + adjacency + tenure + MAC tiebreak), mesh RX task, root waiving | Done |
+| `include/mesh_conductor.h` | `MeshConductor` static orchestrator, `IMeshRole` interface, `Gateway` / `MeshNode` classes | Done |
+| `src/mesh_conductor.cpp` | WiFi mesh init, ESP-IDF mesh event handler, root-observation role assignment, mesh RX task, battery-based `requestStepDown()` | Done |
 | `src/mesh_gateway.cpp` | `Gateway::begin/end/onPeerJoined/onPeerLeft/printStatus` — gateway role behavior | Done (Phase 1 stub, extended in Phase 5) |
 | `src/mesh_node.cpp` | `MeshNode::begin/end/onPeerJoined/onPeerLeft/onGatewayLost` — peer role behavior | Done (Phase 1 stub) |
 
-### Phase 2 — FTM Localization (stub)
+### Phase 2 — FTM Localization (implemented)
 
 | File | Purpose | Status |
 |------|---------|--------|
-| `include/ftm_manager.h` | FTM initiator/responder, round-robin scheduling | Stub |
-| `src/ftm_manager.cpp` | FTM API wrapper, distance measurement, sample averaging | Stub |
-| `include/position_solver.h` | 3D position solver (MDS / trilateration) | Stub |
-| `src/position_solver.cpp` | Distance matrix → 3D coordinates | Stub |
+| `include/peer_table.h` / `src/peer_table.cpp` | IRAM peer map (16 nodes), heartbeat-driven, status flags | Done |
+| `include/ftm_manager.h` / `src/ftm_manager.cpp` | FTM initiator with 2σ outlier rejection, session management | Done |
+| `include/ftm_scheduler.h` / `src/ftm_scheduler.cpp` | Priority queue, wake/ready/go state machine, anchor+incremental scheduling | Done |
+| `include/position_solver.h` / `src/position_solver.cpp` | Classical MDS via power iteration + per-node Kalman filter, 1D/2D/3D adaptive | Done |
 
-### Phase 3 — Audio Engine (implemented)
+### Phase 3 — Audio Engine (verified)
 
 | File | Purpose | Status |
 |------|---------|--------|
@@ -380,14 +408,15 @@ LOW_BATTERY → DEEP_SLEEP (timer-only wake for periodic check)
 | `include/clock_sync.h` | `ClockSync` static class — gateway timer broadcast, peer offset tracking | Done |
 | `src/clock_sync.cpp` | FreeRTOS software timer, `millis()` offset sync, `meshTime()` API | Done |
 
-### Phase 5 — Web UI (stub)
+### Phase 5 — Web UI (partially implemented)
 
 | File | Purpose | Status |
 |------|---------|--------|
-| `include/web_server.h` | Gateway web server — SoftAP, REST API, static assets | Stub |
-| `src/web_server.cpp` | ESPAsyncWebServer routes, JSON endpoints, file upload | Stub |
-| `include/storage_manager.h` | LittleFS management — sample storage, config persistence | Stub |
-| `src/storage_manager.cpp` | File CRUD, space accounting, format/mount | Stub |
+| `include/web_server.h` / `src/web_server.cpp` | Gateway web server (ESPAsyncWebServer on router STA IP), REST API, WebSocket broadcast, WiFi cred management, DNS captive portal | Done |
+| `include/storage_manager.h` / `src/storage_manager.cpp` | LittleFS mount, gzip-transparent file serving | Done |
+| `include/mesh_delegate.h` / `src/mesh_delegate.cpp` | `Delegate` role — WiFi wizard SoftAP (`Squeek_Config_XXYY`), scan, connect, credential save | Done |
+| `include/nvs_config_registry.h` / `src/nvs_config_registry.cpp` | Remote NVS config read/write on peer nodes via `MSG_TYPE_CONFIG_REQ/RESP` | Done |
+| `web/dashboard/` | Dashboard HTML/JS/CSS source (future) | Stub |
 
 ### Phase 6 — Stealth & Polish (stub)
 
@@ -431,104 +460,96 @@ All major subsystem classes use the **static class** pattern: deleted constructo
 
 **Current members:**
 
-| Member | Type | NVS Key | Default | Visibility | Purpose |
-|--------|------|---------|---------|------------|---------|
-| `settingHash` | `uint64_t` | `"sHash"` | `SETTINGS_HASH` | **private** | Compile-time defaults fingerprint |
-| `ledsEnabled` | `bool` | `"ledsEn"` | `true` | public | Master LED enable/disable; LedDriver obeys via `BeforeChangeFn` |
-| `electWBattery` | `float` | `"ewBat"` | `1.0` | public | Election weight per mV of battery |
-| `electWAdjacency` | `float` | `"ewAdj"` | `5.0` | public | Election weight per visible peer |
-| `electWTenure` | `float` | `"ewTen"` | `8.0` | public | Election penalty per past gateway term |
-| `electWLowbatPenalty` | `float` | `"ewLbp"` | `0.1` | public | Score multiplier when below `ELECT_BATTERY_FLOOR_MV` |
-| `debugTimeout_ms` | `uint32_t` | `"dbgTmo"` | `15000` | public | Debug menu marquee timeout in ms (0 = infinite) |
-| `clrInit` | `uint32_t` | `"clrInit"` | `0x00140800` | public | Boot-blink LED color (dim orange) |
-| `clrReady` | `uint32_t` | `"clrRdy"` | `0x00001400` | public | Init-done LED color (dim green) |
-| `clrGateway` | `uint32_t` | `"clrGw"` | `0x000000FF` | public | Gateway heartbeat LED color (blue) |
-| `clrPeer` | `uint32_t` | `"clrPeer"` | `0x0000FF00` | public | Connected peer heartbeat LED color (green) |
-| `clrDisconnected` | `uint32_t` | `"clrDisc"` | `0x00FF0000` | public | Disconnected heartbeat LED color (red) |
+| Member | Type | NVS Key | Default | Phase | Purpose |
+|--------|------|---------|---------|-------|---------|
+| `settingHash` | `uint64_t` | `"sHash"` | `SETTINGS_HASH` | 1 | Compile-time defaults fingerprint (**private**) |
+| `ledsEnabled` | `bool` | `"ledsEn"` | `true` | 1 | Master LED enable/disable; LedDriver obeys via `BeforeChangeFn` |
+| `colorInit` | `uint32_t` | `"clrInit"` | `0x00140600` | 1 | Boot-blink LED color (dim orange) |
+| `colorReady` | `uint32_t` | `"clrRdy"` | `0x00140F00` | 1 | Init-done LED color (dim yellow) |
+| `colorGateway` | `uint32_t` | `"clrGw"` | `0x00000008` | 1 | Gateway heartbeat LED color (dim blue) |
+| `colorPeer` | `uint32_t` | `"clrPeer"` | `0x00000800` | 1 | Connected peer heartbeat LED color (dim green) |
+| `colorDisconnected` | `uint32_t` | `"clrDisc"` | `0x00200000` | 1 | Disconnected heartbeat LED color (dim red) |
+| `heartbeatInterval_s` | `uint32_t` | `"hbInt"` | `30` | 2 | Heartbeat interval (seconds) |
+| `heartbeatStaleMultiplier` | `uint32_t` | `"hbStale"` | `3` | 2 | Missed heartbeats before peer marked stale |
+| `reelectionCooldown_s` | `uint16_t` | `"reelCd"` | `60` | 2 | Minimum seconds between step-down attempts |
+| `batteryHysteresis_mv` | `uint16_t` | `"batHyst"` | `300` | 2 | Battery recovery hysteresis above `BATTERY_LOW_MV` before clearing waived flag |
+| `ftmStaleness_s` | `uint32_t` | `"ftmStale"` | `300` | 2 | FTM data staleness threshold (seconds) |
+| `ftmNewNodeAnchors` | `uint32_t` | `"ftmAnch"` | `5` | 2 | Anchor FTM rounds for new nodes |
+| `ftmSamplesPerPair` | `uint32_t` | `"ftmSamp"` | `8` | 2 | FTM samples per pair |
+| `ftmPairTimeout_ms` | `uint32_t` | `"ftmTmo"` | `3000` | 2 | FTM pair timeout (ms) |
+| `ftmSweepInterval_s` | `uint32_t` | `"ftmSwp"` | `600` | 2 | FTM full sweep interval (seconds) |
+| `ftmKalmanProcessNoise` | `float` | `"ftmKpn"` | `0.01` | 2 | Kalman filter process noise for FTM |
+| `ftmResponderOffset_cm` | `uint32_t` | `"ftmOfs"` | `0` | 2 | FTM responder offset calibration (cm) |
+| `orchMode` | `uint32_t` | `"orchMode"` | `0` | 4 | Orchestrator play mode (0=off) |
+| `orchTravelDelay_ms` | `uint32_t` | `"orchTrvD"` | `500` | 4 | Delay between travel hops (ms) |
+| `orchRandomMin_ms` | `uint32_t` | `"orchRMin"` | `3000` | 4 | Random popup minimum interval (ms) |
+| `orchRandomMax_ms` | `uint32_t` | `"orchRMax"` | `15000` | 4 | Random popup maximum interval (ms) |
+| `orchToneIndex` | `uint32_t` | `"orchTone"` | `0` | 4 | Default tone index for orchestrator |
+| `clockSyncInterval_s` | `uint32_t` | `"csyncInt"` | `10` | 4 | Clock sync broadcast interval (seconds) |
+| `webEnabled` | `bool` | `"webEn"` | `true` | 5 | Web server enable/disable |
+| `fastScanDelay_s` | `uint16_t` | `"fastScn"` | `5` | 5 | Fast-boot scan delay before self-promotion (seconds) |
+| `delegateTimeout_s` | `uint16_t` | `"dlgTmo"` | `240` | 5 | Delegate watchdog timeout (seconds, clamped 60–600) |
+| `scanContestTimeout_s` | `uint16_t` | `"scnTmo"` | `10` | 5 | Scan contest collection timeout — how long gateway waits for peer scan results (seconds, clamped 5–30) |
 
 **Supported `PropertyValue` types:** `bool`, `uint16_t`, `uint32_t`, `uint64_t`, `float` (stored as bit-cast `uint32_t` in NVS).
 
-### 7.2 MeshConductor — Election Scoring
+### 7.2 MeshConductor — Root-Observation Role Assignment
 
-Gateway election uses a `double` score computed by `MeshConductor::computeScore()`. All weight factors are NVS-backed `PropertyValue<float>` members of `NvsConfigManager`, tunable at runtime without reflashing.
+The Squeek Gateway role is assigned by observing ESP-MESH root status — whichever node is the mesh root automatically becomes the Gateway. There is no overlay election protocol.
 
-**Score formula:**
+**Role assignment rules:**
+- When a node becomes root (`esp_mesh_is_root()` returns true), `MeshConductor` assigns it the Gateway role.
+- When a node loses root status, it transitions to the MeshNode (peer) role.
+- On gateway loss, ESP-MESH's internal root recovery promotes a new root; that node becomes Gateway.
+- `fix_root(false)` (default) — ESP-MESH handles root election and dual-root resolution natively using RSSI-based voting. Root changes are triggered voluntarily via `esp_mesh_waive_root()`.
 
-```
-score = battery_mv   * electWBattery
-      + peer_count   * electWAdjacency
-      - gw_tenure    * electWTenure
-      + mac_tiebreak                    (normalized to [0, 1))
+**Battery rotation (absolute threshold + "hot potato" waiving):**
+The gateway monitors its own battery via `PeerTable::checkReelection()`. When gateway battery drops below `BATTERY_LOW_MV` (3300 mV) and at least one alive peer has NOT set the `PEER_STATUS_WAIVED` flag in its heartbeat, the gateway:
+1. Sets `waived_low_battery = 1` in RTC state
+2. Calls `MeshConductor::requestStepDown()` → `stepDown()` → `esp_mesh_waive_root(NULL, MESH_VOTE_REASON_ROOT_INITIATED)`
+3. ESP-MESH fires `MESH_EVENT_ROOT_SWITCH_REQ` → `assignRoleFromMeshState()` detects role mismatch → reboot as PEER
 
-if battery_mv < ELECT_BATTERY_FLOOR_MV:
-    score *= electWLowbatPenalty
-```
-
-- **Battery** dominates: the healthiest node should be gateway (battery-powered mesh).
-- **Adjacency** rewards well-connected nodes (better relay candidates).
-- **Tenure** penalizes nodes that have been gateway too many times (spreads battery drain).
-- **Low-battery penalty** is a multiplier (default `0.1` = 90% penalty), not a disqualification — a low-battery node can still win if all others are worse.
-- **MAC tiebreak** is the last 2 bytes of the MAC divided by 65536, ensuring a deterministic winner on exact ties without influencing real factors.
-
-The score is broadcast as a `double` in the `ElectionScore` packed struct over the mesh. The highest score wins; exact ties fall back to full MAC comparison.
+The waived node advertises `PEER_STATUS_WAIVED` in its heartbeat flags, so the new gateway knows not to waive back to it. If ALL peers are waived, the current gateway stays alive (last-standing). Battery recovery clears the waived flag when battery exceeds `BATTERY_LOW_MV + batteryHysteresis_mv` (default 300 mV).
 
 ### 7.2.1 Mesh Timing Scenarios
 
-Sequence diagrams for the routerless mesh lifecycle. The `NO_PARENT_FOUND` handler uses a non-blocking FreeRTOS timer (MAC-derived jitter, 0–2000 ms) instead of `vTaskDelay`, so the event loop stays responsive and scanning continues while the promote timer is pending.
+Sequence diagrams for the mesh lifecycle. With `fix_root(false)`, ESP-MESH handles root election natively — no promote timer or manual self-promotion is needed. ESP-MESH's internal RSSI-based voting elects a root; during routerless bootstrap all nodes have RSSI=0, so the election completes with an arbitrary winner.
 
-Key constants (from `bsp.hpp`): internal scan window ~18 s (60 cycles), `ELECT_SETTLE_MS` = 3 s, `ELECT_TIMEOUT_MS` = 15 s, `MESH_REELECT_SLEEP_MS` = 5 s.
+Key constants (from `bsp.hpp`): `MESH_REELECT_SLEEP_MS` = 5 s.
 
 #### Scenario 1 — Single Node Boot
 
 ```mermaid
 sequenceDiagram
     participant N as Node
-    participant T as Timers
 
     N->>N: MeshConductor::start()
     Note over N: MESH_EVENT_STARTED
-    Note over N: ESP-IDF internal scans (~18 s, 60 cycles)
-    Note over N: MESH_EVENT_NO_PARENT_FOUND
-    N->>T: start promote timer (MAC jitter, 0–2000 ms)
-    T-->>N: promoteTimerCb()
-    N->>N: esp_mesh_set_type(MESH_ROOT)
-    N->>N: esp_mesh_set_self_organized(true, false)
+    Note over N: ESP-MESH internal election (RSSI-based)
+    Note over N: No other nodes → wins election → becomes root
+    Note over N: MESH_EVENT_PARENT_CONNECTED (routerless root)
     N->>N: s_connected = true
-    N->>T: start elect timer (ELECT_SETTLE_MS = 3 s)
-    T-->>N: runElection()
-    Note over N: totalNodes == 1 → self-elect Gateway
-    N->>N: assignRole(own_mac) → Gateway
+    Note over N: esp_mesh_is_root() == true
+    N->>N: assignRoleFromMeshState() → Gateway
 ```
 
 #### Scenario 2 — Simultaneous Two-Node Boot
 
 ```mermaid
 sequenceDiagram
-    participant A as Node A (low jitter)
-    participant B as Node B (high jitter)
-    participant T as Timers
+    participant A as Node A
+    participant B as Node B
 
     Note over A,B: Both call start() at roughly the same time
-    Note over A: STARTED → scans (~18 s)
-    Note over B: STARTED → scans (~18 s)
-    Note over A: NO_PARENT_FOUND
-    Note over B: NO_PARENT_FOUND
-    A->>T: start promote (e.g. 580 ms)
-    B->>T: start promote (e.g. 1584 ms)
-    Note over A,B: ESP-IDF continues scanning on both nodes
-    T-->>A: promoteTimerCb() — fires first
-    A->>A: set_type(ROOT) + set_self_organized(true, false)
-    A->>A: s_connected = true
-    A->>T: start elect (3 s)
-    Note over A: SoftAP now visible
-    Note over B: Ongoing scan discovers A's SoftAP
+    Note over A,B: ESP-MESH discovers both nodes during scanning
+    Note over A,B: ESP-MESH runs RSSI-based election (equal RSSI=0 routerless)
+    Note over A: Wins election → becomes root
+    Note over A: MESH_EVENT_PARENT_CONNECTED
+    A->>A: esp_mesh_is_root() == true → Gateway
+    Note over B: Discovers A's SoftAP
     Note over B: MESH_EVENT_PARENT_CONNECTED
-    B->>T: xTimerStop(promote) — cancelled
-    B->>B: s_connected = true
-    B->>T: start elect (3 s)
-    T-->>A: runElection()
-    T-->>B: runElection()
-    Note over A,B: Scores exchanged → highest score wins Gateway
+    B->>B: esp_mesh_is_root() == false → MeshNode
+    Note over A,B: If both briefly become root, ESP-MESH resolves dual-root natively
 ```
 
 #### Scenario 3 — Late Joiner (mesh already running)
@@ -537,71 +558,112 @@ sequenceDiagram
 sequenceDiagram
     participant R as Root / Gateway
     participant N as New Node
-    participant T as Timers
 
     Note over R: Mesh established, Gateway role active
     N->>N: MeshConductor::start()
-    Note over N: STARTED → scans
+    Note over N: STARTED → scans (ch:0 = all channels)
     Note over N: Finds Root's SoftAP within first scan cycles
     Note over N: MESH_EVENT_PARENT_CONNECTED
     N->>N: s_connected = true
-    N->>T: start elect (3 s)
+    Note over N: esp_mesh_is_root() == false → MeshNode
     Note over R: MESH_EVENT_CHILD_CONNECTED
-    T-->>N: runElection()
-    Note over R,N: Scores exchanged → roles (re)assigned
+    Note over R: Gateway pushes WiFi creds to new peer (if available)
+    Note over R,N: Root unchanged, new node joins as peer
 ```
 
-#### Scenario 4 — Gateway Loss + Re-election
+#### Scenario 4 — Gateway Loss + Root Recovery
 
 ```mermaid
 sequenceDiagram
     participant G as Gateway (Root)
     participant S as Survivor Node
-    participant T as Timers
 
     Note over G,S: Mesh running normally
     G-xS: Gateway dies (power loss / deep sleep)
     Note over S: MESH_EVENT_PARENT_DISCONNECTED
-    S->>S: s_connected = false, onGatewayLost()
-    Note over S: ESP-IDF scans for new parent (~18 s)
-    Note over S: MESH_EVENT_NO_PARENT_FOUND
-    S->>T: start promote (MAC jitter, 0–2000 ms)
-    T-->>S: promoteTimerCb()
-    S->>S: set_type(ROOT) + set_self_organized(true, false)
-    S->>S: s_connected = true
-    S->>T: start elect (3 s)
-    T-->>S: runElection()
-    Note over S: totalNodes == 1 → self-elect Gateway
-    S->>S: assignRole → Gateway
+    S->>S: s_connected = false
+    S->>S: onGatewayLost()
+    S->>S: MeshConductor::stop()
+    Note over S: MAC-jittered backoff (5–15 s)
+    S->>S: esp_restart()
+    Note over S: Reboot → RTC hint as PEER
+    Note over S: MeshConductor::start()
+    Note over S: ESP-MESH election runs — survivor becomes root
+    Note over S: MESH_EVENT_PARENT_CONNECTED
+    Note over S: esp_mesh_is_root() == true → Gateway
 ```
 
-> With multiple survivors, the jitter race applies identically to Scenario 2 — lowest-jitter node promotes first, others discover it and cancel their own promotion.
+> With multiple survivors, the MAC-based jitter (5–15 s) staggers reboots. ESP-MESH's native election picks a new root; others discover its SoftAP during their post-reboot scan and join as peers.
 
-#### Scenario 5 — Debug Menu (Option 4: Mesh Join)
+#### Scenario 5 — Debug Menu (Mesh Join)
 
 ```mermaid
 sequenceDiagram
     participant U as User (Serial)
     participant N as Node
-    participant T as Timers
 
-    U->>N: Select option 4
+    U->>N: Type "mesh" command
     N->>N: MeshConductor::init() + start()
-    Note over N: STARTED → scans (~18 s)
-    Note over N: NO_PARENT_FOUND
-    N->>T: start promote (jitter ms)
-    T-->>N: promoteTimerCb()
-    N->>N: ROOT + s_connected = true
-    N->>T: start elect (3 s)
-    T-->>N: runElection() → self-elect Gateway
+    Note over N: STARTED → ESP-MESH election
+    Note over N: No other nodes → wins election → root
+    Note over N: MESH_EVENT_PARENT_CONNECTED
+    Note over N: esp_mesh_is_root() == true → Gateway
     Note over N: Mesh running, Gateway active
-    Note over U,N: 30 s debug timeout expires
-    N->>N: MeshConductor::stop()
-    N->>T: xTimerStop(promote)
-    N->>T: xTimerStop(elect)
-    N->>N: esp_mesh_stop()
-    N->>U: Return to debug menu (no lingering timers)
 ```
+
+#### Scenario 6 — Setup Delegate (button-triggered WiFi configuration)
+
+Delegation is **manually triggered** by pressing the BOOT button (GPIO9) on the gateway node. There is no automatic delegation — the mesh forms first, the user decides when to initiate WiFi setup.
+
+**BOOT button behavior:**
+- **GATEWAY role active:** initiate delegation — scan contest among peers, best peer becomes delegate
+- **Otherwise:** ignored (ESP-MESH handles root election natively)
+
+**Scan contest:** When the gateway receives a BOOT button press:
+1. Gateway broadcasts `MSG_TYPE_SCAN_REQUEST` to all peers
+2. Each peer performs a WiFi scan (`esp_wifi_scan_start()`) and reports back `MSG_TYPE_SCAN_RESULT` {mac, ssid_count} to gateway
+3. Gateway collects results (10 s timeout), picks the peer with the most visible SSIDs (best radio position for reaching a router)
+4. Gateway creates a *delegate ticket* (winner MAC + `remaining_s` countdown) and sends `MSG_TYPE_SETUP_DELEGATE` to the winner
+
+If the gateway has no peers (lone node), the button press triggers self-delegation: the gateway sets `next_role = DELEGATE` in RTC and reboots.
+
+**Delegate ticket:** Tracks the delegate's MAC and a monotonically decreasing countdown (`remaining_s`, initialized from `delegateTimeout_s` NVS param, default 240 s). The countdown is decremented locally by whoever holds the ticket and **never rolls back** — once it reaches zero, it stays at zero until the gateway acts on it.
+
+**Step-down suppression:** While a delegate ticket is active (`remaining_s > 0`), `requestStepDown()` is suppressed. If root changes anyway (e.g., crash), the outgoing gateway sends the ticket to the new gateway via `MSG_TYPE_DELEGATE_TICKET` as a point-to-point **transfer of powers** during the role transition. The new gateway inherits the ticket and continues the countdown.
+
+**Ticket transfer protocol:** When root changes and the new root differs from the current gateway:
+1. Old gateway sends `MSG_TYPE_DELEGATE_TICKET` (delegate MAC + `remaining_s`) to new gateway
+2. New gateway ACKs with `MSG_TYPE_DELEGATE_TICKET_ACK`
+3. Old gateway steps down to MeshNode
+4. New gateway begins its term with the inherited ticket
+
+If the old gateway crashes before transferring, the delegate eventually times out (watchdog), reboots, rejoins the mesh, and delivers creds normally.
+
+**Delegation flow (multi-node):**
+
+1. User presses BOOT button on the gateway node
+2. Gateway broadcasts `MSG_TYPE_SCAN_REQUEST` to all peers
+3. Each peer runs `esp_wifi_scan_start()`, counts visible SSIDs
+4. Each peer sends `MSG_TYPE_SCAN_RESULT` {mac, ssid_count} back to gateway
+5. Gateway waits up to 10 s, then picks the peer with the highest ssid_count
+6. Gateway creates delegate ticket (winner MAC, `remaining_s` = 240)
+7. Gateway sends `MSG_TYPE_SETUP_DELEGATE` to the winner — step-down now suppressed
+8. Winner sets `next_role = DELEGATE` in RTC, reboots into Delegate role
+9. Delegate starts SoftAP `Squeek_Config_XXYY`, captive portal, 240 s watchdog
+10. User connects phone to the SoftAP, enters WiFi credentials via wizard
+11. Delegate tests router connection, saves creds to NVS
+12. Delegate tears down SoftAP and web server immediately after saving creds (deauths clients, no poll window), then reboots as Peer
+13. Peer suppresses router creds in mesh config (delegate return flag) — rejoins the original mesh on the old channel, sends `MSG_TYPE_WIFI_CREDS` to gateway
+14. Gateway saves creds, clears ticket (step-down resumes), starts web server, broadcasts creds to all peers
+15. Gateway applies router creds to mesh config via `esp_mesh_set_config()` → ESP-MESH triggers coordinated channel migration to router channel; all peers also update their local mesh config
+
+**Delegation flow (lone gateway):**
+
+1. User presses BOOT button — gateway has no peers
+2. Gateway self-delegates: sets `next_role = DELEGATE` in RTC, reboots
+3. Steps 9–13 above, except the delegate IS the former gateway
+
+> **Lone gateway:** If the gateway has no peers, the BOOT button press triggers self-delegation (sets `next_role = DELEGATE` in RTC and reboots). **Fallback strategy:** If WiFi scanning on mesh nodes proves unreliable (netif conflicts), the scan contest can be replaced by selecting the peer with the strongest RSSI to the root (already known from the mesh layer).
 
 ### 7.3 LedDriver
 
@@ -621,11 +683,12 @@ sequenceDiagram
 
 1. ~~**Piezo GPIO assignment**~~ — Resolved: GPIO22 (`PIEZO_PIN_A`) + GPIO23 (`PIEZO_PIN_B`), defined in `bsp.hpp`.
 2. ~~**Battery ADC GPIO**~~ — Resolved: GPIO2 (`BATTERY_ADC_PIN`), defined in `bsp.hpp`.
-3. ~~**ESP-IDF WiFi Mesh vs ESP-NOW**~~ — Resolved: using `esp_mesh` (ESP-IDF WiFi Mesh). Implemented in `MeshConductor`.
+3. ~~**ESP-IDF WiFi Mesh vs ESP-NOW**~~ — Resolved: using `esp_mesh` (ESP-IDF WiFi Mesh) in FIXED_ROOT mode. Implemented in `MeshConductor`.
 4. ~~**Mozzi on ESP32-C6**~~ — Resolved: Mozzi incompatible with ESP32-C6 single-core RISC-V (watchdog resets). Replaced with LEDC PWM + GPTimer.
-5. **FTM accuracy in practice** — Real-world testing needed in Phase 2 to calibrate expectations for 3D positioning.
-6. **Web UI framework** — Vanilla JS for minimal size, or a lightweight framework? Storage budget is limited (4MB flash shared with firmware + samples).
+5. ~~**Web UI framework**~~ — Resolved: ESPAsyncWebServer + vanilla HTML/JS served from LittleFS (gzip-compressed).
+6. **FTM accuracy in practice** — Real-world testing needed to calibrate expectations for 3D positioning.
 7. **Max sample storage** — How much flash to allocate for uploaded MP3 samples after firmware + UI assets?
+8. **Multi-AP WiFi credential storage** — Currently using custom NVS keys for a single SSID/password. Espressif's built-in WiFi credential NVS storage supports multiple known routers — should we migrate?
 
 ---
 
@@ -654,13 +717,13 @@ An always-on serial CLI for in-situ hardware and firmware testing. Runs as a Fre
 | `battery` | Read battery voltage and status |
 | `wifi` | Scan nearby APs |
 | `mesh` | Join mesh, show peers, then stop |
-| `elect` | Force gateway re-election |
+| `elect` | Waive gateway role — ESP-MESH re-elects (`esp_mesh_waive_root()`) |
 | `rtc` | RTC memory write/readback test |
 | `sleep [N]` | Light sleep for N seconds (default 5) |
 | `peers` | Show PeerTable (synced from gateway) |
 | `tone` | Interactive tone player — ASCII numpad, keys 1-6 play tones, 0 stops, `.` quits |
 | `config` | Get/set NVS config locally or on peers (`config list`, `config get`, `config set`) |
-| `mode` | Set role: `mode gateway` or `mode peer` |
+| `mode` | Step down from gateway: `mode peer` |
 | `ftm` | FTM single-shot to first peer |
 | `sweep` | FTM full sweep, print distance matrix |
 | `solve` | Run MDS position solver |

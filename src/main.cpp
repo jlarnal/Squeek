@@ -45,16 +45,14 @@ void setup()
         MeshConductor::setRole(new Delegate());
     } else if (nextRole == (uint8_t)RoleId::GATEWAY) {
         SqLog.println("[boot] RTC says GATEWAY — fast-boot");
-        MeshConductor::setFastBoot(true);
         MeshConductor::init();
         MeshConductor::start();
     } else if (nextRole == (uint8_t)RoleId::PEER) {
-        SqLog.println("[boot] RTC says PEER — fast-boot");
-        MeshConductor::setFastBoot(true);
+        SqLog.println("[boot] RTC says PEER — scanning for mesh");
         MeshConductor::init();
         MeshConductor::start();
     } else {
-        SqLog.println("[boot] Normal boot — mesh scan + election");
+        SqLog.println("[boot] Normal boot — mesh scan");
         MeshConductor::init();
         MeshConductor::start();
     }
@@ -72,7 +70,11 @@ void loop()
 {
     IMeshRole* role = MeshConductor::role();
     if (role && role->roleId() == RoleId::DELEGATE) {
-        LedDriver::rgbBlink(RgbColor(40, 0, 30), 2000, 500);
+        if (Delegate::hasClient()) {
+            LedDriver::rgbBlink(RgbColor(40, 0, 30), 125, 125);  // 4x faster when client connected
+        } else {
+            LedDriver::rgbBlink(RgbColor(40, 0, 30), 2000, 500);
+        }
     } else if (MeshConductor::isGateway()) {
         LedDriver::rgbBlink(RgbColor(NvsConfigManager::colorGateway),2000,500);
     } else if (MeshConductor::isConnected()) {

@@ -116,6 +116,15 @@ static void sendWakeMessages(uint8_t idxA, uint8_t idxB) {
     }
 }
 
+// Deferred FTM go — runs in a short-lived task to avoid Timer Service stack overflow
+static struct { uint8_t target_ap[6]; uint8_t samples; } s_deferredGo;
+
+static void ftmGoTask(void* p) {
+    (void)p;
+    FtmManager::onFtmGo(s_deferredGo.target_ap, s_deferredGo.samples);
+    vTaskDelete(nullptr);
+}
+
 static void sendGoMessage(uint8_t initiatorIdx, const uint8_t* responder_ap_mac) {
     PeerEntry* initiator = PeerTable::getEntryByIndex(initiatorIdx);
     if (!initiator) return;
@@ -129,8 +138,11 @@ static void sendGoMessage(uint8_t initiatorIdx, const uint8_t* responder_ap_mac)
     esp_read_mac(own_mac, ESP_MAC_WIFI_STA);
 
     if (memcmp(initiator->mac, own_mac, 6) == 0) {
-        // Gateway is the initiator — invoke FTM directly
-        FtmManager::onFtmGo(go.target_ap, go.samples);
+        // Gateway is the initiator — run in dedicated task to avoid
+        // Timer Service stack overflow (FtmManager uses heavy SqLog calls)
+        memcpy(s_deferredGo.target_ap, go.target_ap, 6);
+        s_deferredGo.samples = go.samples;
+        xTaskCreate(ftmGoTask, "ftmGo", 4096, nullptr, 5, nullptr);
     } else {
         MeshConductor::sendToNode(initiator->mac, &go, sizeof(go));
     }

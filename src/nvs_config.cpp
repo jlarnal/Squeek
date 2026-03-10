@@ -15,22 +15,17 @@ bool isOpen         = false;
 // Static member definitions with defaults
 PropertyValue<NVS_KEY_SHASH, uint64_t, NvsConfigManager> NvsConfigManager::settingHash(SETTINGS_HASH);
 PropertyValue<NVS_KEY_LEDSEN, bool, NvsConfigManager>     NvsConfigManager::ledsEnabled(DEFAULT_LEDS_ENABLED);
-PropertyValue<NVS_KEY_EW_BAT, float, NvsConfigManager>    NvsConfigManager::electWBattery(DEFAULT_ELECT_W_BATTERY);
-PropertyValue<NVS_KEY_EW_ADJ, float, NvsConfigManager>    NvsConfigManager::electWAdjacency(DEFAULT_ELECT_W_ADJACENCY);
-PropertyValue<NVS_KEY_EW_TEN, float, NvsConfigManager>    NvsConfigManager::electWTenure(DEFAULT_ELECT_W_TENURE);
-PropertyValue<NVS_KEY_EW_LBP, float, NvsConfigManager>    NvsConfigManager::electWLowbatPenalty(DEFAULT_ELECT_W_LOWBAT_PEN);
 PropertyValue<NVS_KEY_CLR_INIT, uint32_t, NvsConfigManager> NvsConfigManager::colorInit(DEFAULT_CLR_INIT);
 PropertyValue<NVS_KEY_CLR_RDY,  uint32_t, NvsConfigManager> NvsConfigManager::colorReady(DEFAULT_CLR_READY);
 PropertyValue<NVS_KEY_CLR_GW,   uint32_t, NvsConfigManager> NvsConfigManager::colorGateway(DEFAULT_CLR_GATEWAY);
 PropertyValue<NVS_KEY_CLR_PEER, uint32_t, NvsConfigManager> NvsConfigManager::colorPeer(DEFAULT_CLR_PEER);
 PropertyValue<NVS_KEY_CLR_DISC, uint32_t, NvsConfigManager> NvsConfigManager::colorDisconnected(DEFAULT_CLR_DISCONNECTED);
 
-// Phase 2: Heartbeat & re-election
+// Phase 2: Heartbeat & battery rotation
 PropertyValue<NVS_KEY_HB_INT,   uint32_t, NvsConfigManager> NvsConfigManager::heartbeatInterval_s(DEFAULT_HB_INTERVAL_S);
 PropertyValue<NVS_KEY_HB_STALE, uint32_t, NvsConfigManager> NvsConfigManager::heartbeatStaleMultiplier(DEFAULT_HB_STALE_MULT);
-PropertyValue<NVS_KEY_REEL_DMV, uint32_t, NvsConfigManager> NvsConfigManager::reelectionBatteryDelta_mv(DEFAULT_REELECT_DELTA_MV);
 PropertyValue<NVS_KEY_REEL_CD,  uint16_t, NvsConfigManager> NvsConfigManager::reelectionCooldown_s(DEFAULT_REELECT_COOLDOWN_S);
-PropertyValue<NVS_KEY_REEL_DTH, uint16_t, NvsConfigManager> NvsConfigManager::reelectionDethrone_mv(DEFAULT_REELECT_DETHRONE_MV);
+PropertyValue<NVS_KEY_BAT_HYST, uint16_t, NvsConfigManager> NvsConfigManager::batteryHysteresis_mv(DEFAULT_BATTERY_HYST_MV);
 
 // Phase 2: FTM
 PropertyValue<NVS_KEY_FTM_STALE, uint32_t, NvsConfigManager> NvsConfigManager::ftmStaleness_s(DEFAULT_FTM_STALE_S);
@@ -157,10 +152,6 @@ void NvsConfigManager::reloadFromNvs()
 
     settingHash.loadInitial(nvsGetU64(NVS_KEY_SHASH, SETTINGS_HASH));
     ledsEnabled.loadInitial(nvsGetBool(NVS_KEY_LEDSEN, DEFAULT_LEDS_ENABLED));
-    electWBattery.loadInitial(nvsGetFloat(NVS_KEY_EW_BAT, DEFAULT_ELECT_W_BATTERY));
-    electWAdjacency.loadInitial(nvsGetFloat(NVS_KEY_EW_ADJ, DEFAULT_ELECT_W_ADJACENCY));
-    electWTenure.loadInitial(nvsGetFloat(NVS_KEY_EW_TEN, DEFAULT_ELECT_W_TENURE));
-    electWLowbatPenalty.loadInitial(nvsGetFloat(NVS_KEY_EW_LBP, DEFAULT_ELECT_W_LOWBAT_PEN));
     colorInit.loadInitial(nvsGetU32(NVS_KEY_CLR_INIT, DEFAULT_CLR_INIT));
     colorReady.loadInitial(nvsGetU32(NVS_KEY_CLR_RDY, DEFAULT_CLR_READY));
     colorGateway.loadInitial(nvsGetU32(NVS_KEY_CLR_GW, DEFAULT_CLR_GATEWAY));
@@ -170,9 +161,8 @@ void NvsConfigManager::reloadFromNvs()
     // Phase 2
     heartbeatInterval_s.loadInitial(nvsGetU32(NVS_KEY_HB_INT, DEFAULT_HB_INTERVAL_S));
     heartbeatStaleMultiplier.loadInitial(nvsGetU32(NVS_KEY_HB_STALE, DEFAULT_HB_STALE_MULT));
-    reelectionBatteryDelta_mv.loadInitial(nvsGetU32(NVS_KEY_REEL_DMV, DEFAULT_REELECT_DELTA_MV));
     reelectionCooldown_s.loadInitial(nvsGetU16(NVS_KEY_REEL_CD, DEFAULT_REELECT_COOLDOWN_S));
-    reelectionDethrone_mv.loadInitial(nvsGetU16(NVS_KEY_REEL_DTH, DEFAULT_REELECT_DETHRONE_MV));
+    batteryHysteresis_mv.loadInitial(nvsGetU16(NVS_KEY_BAT_HYST, DEFAULT_BATTERY_HYST_MV));
     ftmStaleness_s.loadInitial(nvsGetU32(NVS_KEY_FTM_STALE, DEFAULT_FTM_STALE_S));
     ftmNewNodeAnchors.loadInitial(nvsGetU32(NVS_KEY_FTM_ANCH, DEFAULT_FTM_NEW_ANCHORS));
     ftmSamplesPerPair.loadInitial(nvsGetU32(NVS_KEY_FTM_SAMP, DEFAULT_FTM_SAMPLES));
@@ -208,10 +198,6 @@ bool NvsConfigManager::restoreFactoryDefault(uint32_t safeKey)
 
     settingHash         = SETTINGS_HASH;
     ledsEnabled         = DEFAULT_LEDS_ENABLED;
-    electWBattery       = DEFAULT_ELECT_W_BATTERY;
-    electWAdjacency     = DEFAULT_ELECT_W_ADJACENCY;
-    electWTenure        = DEFAULT_ELECT_W_TENURE;
-    electWLowbatPenalty  = DEFAULT_ELECT_W_LOWBAT_PEN;
     colorInit          = DEFAULT_CLR_INIT;
     colorReady         = DEFAULT_CLR_READY;
     colorGateway       = DEFAULT_CLR_GATEWAY;
@@ -221,9 +207,8 @@ bool NvsConfigManager::restoreFactoryDefault(uint32_t safeKey)
     // Phase 2
     heartbeatInterval_s       = (uint32_t)DEFAULT_HB_INTERVAL_S;
     heartbeatStaleMultiplier  = (uint32_t)DEFAULT_HB_STALE_MULT;
-    reelectionBatteryDelta_mv = (uint32_t)DEFAULT_REELECT_DELTA_MV;
     reelectionCooldown_s      = DEFAULT_REELECT_COOLDOWN_S;
-    reelectionDethrone_mv     = DEFAULT_REELECT_DETHRONE_MV;
+    batteryHysteresis_mv      = DEFAULT_BATTERY_HYST_MV;
     ftmStaleness_s            = (uint32_t)DEFAULT_FTM_STALE_S;
     ftmNewNodeAnchors         = (uint32_t)DEFAULT_FTM_NEW_ANCHORS;
     ftmSamplesPerPair         = (uint32_t)DEFAULT_FTM_SAMPLES;

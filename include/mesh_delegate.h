@@ -13,6 +13,8 @@ public:
     void printStatus() override;
 
     bool onCredsSubmitted(const char* ssid, const char* pass);
+
+    static bool hasClient();
 };
 
 #endif // MESH_DELEGATE_H

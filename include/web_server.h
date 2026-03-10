@@ -18,6 +18,10 @@ public:
     // WebSocket broadcast JSON to all connected clients
     static void broadcast(const char* json);
 
+    // Dashboard-specific broadcasts (Task 7: WebSocket push)
+    static void broadcastPeers();
+    static void broadcastOrchState();
+
     // WiFi credential management (raw NVS string API)
     static bool loadWifiCreds(char* ssid, size_t ssidLen, char* pass, size_t passLen);
     static bool saveWifiCreds(const char* ssid, const char* pass);

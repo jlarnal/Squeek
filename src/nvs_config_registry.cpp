@@ -6,10 +6,6 @@
 
 static const ConfigField s_fields[] = {
     { NVS_KEY_LEDSEN,    "LEDs enabled",                CFG_BOOL  },
-    { NVS_KEY_EW_BAT,   "Election weight: battery",    CFG_FLOAT },
-    { NVS_KEY_EW_ADJ,   "Election weight: adjacency",  CFG_FLOAT },
-    { NVS_KEY_EW_TEN,   "Election weight: tenure",     CFG_FLOAT },
-    { NVS_KEY_EW_LBP,   "Election weight: low-bat penalty", CFG_FLOAT },
     { NVS_KEY_CLR_INIT,  "Color: init (0xRRGGBB)",     CFG_U32   },
     { NVS_KEY_CLR_RDY,   "Color: ready",               CFG_U32   },
     { NVS_KEY_CLR_GW,    "Color: gateway",              CFG_U32   },
@@ -17,9 +13,8 @@ static const ConfigField s_fields[] = {
     { NVS_KEY_CLR_DISC,  "Color: disconnected",         CFG_U32   },
     { NVS_KEY_HB_INT,    "Heartbeat interval (s)",      CFG_U32   },
     { NVS_KEY_HB_STALE,  "Heartbeat stale multiplier",  CFG_U32   },
-    { NVS_KEY_REEL_DMV,  "Re-election battery delta (mV)", CFG_U32 },
-    { NVS_KEY_REEL_CD,   "Re-election cooldown (s)",      CFG_U32 },
-    { NVS_KEY_REEL_DTH,  "Re-election dethrone delta (mV)", CFG_U32 },
+    { NVS_KEY_REEL_CD,   "Battery rotation cooldown (s)",  CFG_U32 },
+    { NVS_KEY_BAT_HYST,  "Battery hysteresis (mV)",       CFG_U32 },
     { NVS_KEY_FTM_STALE, "FTM staleness (s)",           CFG_U32   },
     { NVS_KEY_FTM_ANCH,  "FTM new-node anchors",        CFG_U32   },
     { NVS_KEY_FTM_SAMP,  "FTM samples per pair",        CFG_U32   },
@@ -41,10 +36,6 @@ static constexpr uint8_t FIELD_COUNT = sizeof(s_fields) / sizeof(s_fields[0]);
 
 static void getField(JsonDocument& doc, const ConfigField& f) {
     if (strcmp(f.key, NVS_KEY_LEDSEN) == 0)     { doc[f.key] = (bool)NvsConfigManager::ledsEnabled; return; }
-    if (strcmp(f.key, NVS_KEY_EW_BAT) == 0)     { doc[f.key] = (float)NvsConfigManager::electWBattery; return; }
-    if (strcmp(f.key, NVS_KEY_EW_ADJ) == 0)     { doc[f.key] = (float)NvsConfigManager::electWAdjacency; return; }
-    if (strcmp(f.key, NVS_KEY_EW_TEN) == 0)     { doc[f.key] = (float)NvsConfigManager::electWTenure; return; }
-    if (strcmp(f.key, NVS_KEY_EW_LBP) == 0)     { doc[f.key] = (float)NvsConfigManager::electWLowbatPenalty; return; }
     if (strcmp(f.key, NVS_KEY_CLR_INIT) == 0)   { doc[f.key] = (uint32_t)NvsConfigManager::colorInit; return; }
     if (strcmp(f.key, NVS_KEY_CLR_RDY) == 0)    { doc[f.key] = (uint32_t)NvsConfigManager::colorReady; return; }
     if (strcmp(f.key, NVS_KEY_CLR_GW) == 0)     { doc[f.key] = (uint32_t)NvsConfigManager::colorGateway; return; }
@@ -52,9 +43,8 @@ static void getField(JsonDocument& doc, const ConfigField& f) {
     if (strcmp(f.key, NVS_KEY_CLR_DISC) == 0)   { doc[f.key] = (uint32_t)NvsConfigManager::colorDisconnected; return; }
     if (strcmp(f.key, NVS_KEY_HB_INT) == 0)     { doc[f.key] = (uint32_t)NvsConfigManager::heartbeatInterval_s; return; }
     if (strcmp(f.key, NVS_KEY_HB_STALE) == 0)   { doc[f.key] = (uint32_t)NvsConfigManager::heartbeatStaleMultiplier; return; }
-    if (strcmp(f.key, NVS_KEY_REEL_DMV) == 0)   { doc[f.key] = (uint32_t)NvsConfigManager::reelectionBatteryDelta_mv; return; }
     if (strcmp(f.key, NVS_KEY_REEL_CD) == 0)    { doc[f.key] = (uint32_t)(uint16_t)NvsConfigManager::reelectionCooldown_s; return; }
-    if (strcmp(f.key, NVS_KEY_REEL_DTH) == 0)   { doc[f.key] = (uint32_t)(uint16_t)NvsConfigManager::reelectionDethrone_mv; return; }
+    if (strcmp(f.key, NVS_KEY_BAT_HYST) == 0)   { doc[f.key] = (uint32_t)(uint16_t)NvsConfigManager::batteryHysteresis_mv; return; }
     if (strcmp(f.key, NVS_KEY_FTM_STALE) == 0)  { doc[f.key] = (uint32_t)NvsConfigManager::ftmStaleness_s; return; }
     if (strcmp(f.key, NVS_KEY_FTM_ANCH) == 0)   { doc[f.key] = (uint32_t)NvsConfigManager::ftmNewNodeAnchors; return; }
     if (strcmp(f.key, NVS_KEY_FTM_SAMP) == 0)   { doc[f.key] = (uint32_t)NvsConfigManager::ftmSamplesPerPair; return; }
@@ -75,10 +65,6 @@ static void getField(JsonDocument& doc, const ConfigField& f) {
 
 static bool setField(const char* key, JsonVariantConst val) {
     if (strcmp(key, NVS_KEY_LEDSEN) == 0)     { NvsConfigManager::ledsEnabled = val.as<bool>(); return true; }
-    if (strcmp(key, NVS_KEY_EW_BAT) == 0)     { NvsConfigManager::electWBattery = val.as<float>(); return true; }
-    if (strcmp(key, NVS_KEY_EW_ADJ) == 0)     { NvsConfigManager::electWAdjacency = val.as<float>(); return true; }
-    if (strcmp(key, NVS_KEY_EW_TEN) == 0)     { NvsConfigManager::electWTenure = val.as<float>(); return true; }
-    if (strcmp(key, NVS_KEY_EW_LBP) == 0)     { NvsConfigManager::electWLowbatPenalty = val.as<float>(); return true; }
     if (strcmp(key, NVS_KEY_CLR_INIT) == 0)   { NvsConfigManager::colorInit = val.as<uint32_t>(); return true; }
     if (strcmp(key, NVS_KEY_CLR_RDY) == 0)    { NvsConfigManager::colorReady = val.as<uint32_t>(); return true; }
     if (strcmp(key, NVS_KEY_CLR_GW) == 0)     { NvsConfigManager::colorGateway = val.as<uint32_t>(); return true; }
@@ -86,18 +72,17 @@ static bool setField(const char* key, JsonVariantConst val) {
     if (strcmp(key, NVS_KEY_CLR_DISC) == 0)   { NvsConfigManager::colorDisconnected = val.as<uint32_t>(); return true; }
     if (strcmp(key, NVS_KEY_HB_INT) == 0)     { NvsConfigManager::heartbeatInterval_s = val.as<uint32_t>(); return true; }
     if (strcmp(key, NVS_KEY_HB_STALE) == 0)   { NvsConfigManager::heartbeatStaleMultiplier = val.as<uint32_t>(); return true; }
-    if (strcmp(key, NVS_KEY_REEL_DMV) == 0)   { NvsConfigManager::reelectionBatteryDelta_mv = val.as<uint32_t>(); return true; }
     if (strcmp(key, NVS_KEY_REEL_CD) == 0)  {
         uint16_t v = val.as<uint16_t>();
         if (v < 30) v = 30;
         NvsConfigManager::reelectionCooldown_s = v;
         return true;
     }
-    if (strcmp(key, NVS_KEY_REEL_DTH) == 0) {
+    if (strcmp(key, NVS_KEY_BAT_HYST) == 0) {
         uint16_t v = val.as<uint16_t>();
         if (v < 50)   v = 50;
         if (v > 1000)  v = 1000;
-        NvsConfigManager::reelectionDethrone_mv = v;
+        NvsConfigManager::batteryHysteresis_mv = v;
         return true;
     }
     if (strcmp(key, NVS_KEY_FTM_STALE) == 0)  { NvsConfigManager::ftmStaleness_s = val.as<uint32_t>(); return true; }

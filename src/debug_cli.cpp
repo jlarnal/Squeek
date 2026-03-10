@@ -24,6 +24,9 @@
 #include <esp_mac.h>
 #include <WiFi.h>
 #include <string.h>
+#include <driver/temperature_sensor.h>
+
+static temperature_sensor_handle_t s_tempSensor = nullptr;
 
 // --- Command handler prototypes ---
 static void cmd_help(const char* args);
@@ -45,6 +48,7 @@ static void cmd_config(const char* args);
 static void cmd_mode(const char* args);
 static void cmd_status(const char* args);
 static void cmd_orch(const char* args);
+static void cmd_temp(const char* args);
 static void cmd_reboot(const char* args);
 
 // --- Command table ---
@@ -58,15 +62,15 @@ static const CliCommand s_commands[] = {
     { "help",      cmd_help,      "List all commands" },
     { "led",       cmd_led,       "Blink status LED + RGB R/G/B test" },
     { "battery",   cmd_battery,   "Read battery voltage and status" },
-    { "wifi",      cmd_wifi,      "WiFi: scan|set|clear|status|delegate" },
+    { "wifi",      cmd_wifi,      "WiFi: scan|set|clear|status|creds|delegate" },
     { "mesh",      cmd_mesh,      "Join mesh, show peers, then stop" },
-    { "elect",     cmd_elect,     "Force gateway re-election" },
+    { "elect",     cmd_elect,     "Waive gateway role (ESP-MESH re-elects)" },
     { "rtc",       cmd_rtc,       "RTC memory write/readback test" },
     { "sleep",     cmd_sleep,     "Light sleep [seconds] (default 5)" },
     { "peers",     cmd_peers,     "Show PeerTable (synced from gateway)" },
     { "tone",      cmd_tone,      "Interactive tone player (numpad)" },
     { "config",    cmd_config,    "Get/set NVS config locally or on peers" },
-    { "mode",      cmd_mode,      "Set role: 'mode gateway' or 'mode peer'" },
+    { "mode",      cmd_mode,      "Step down from gateway: 'mode peer'" },
     { "ftm",       cmd_ftm,       "FTM single-shot to first peer" },
     { "sweep",     cmd_sweep,     "FTM full sweep, print distance matrix" },
     { "solve",     cmd_solve,     "Run MDS position solver" },
@@ -74,6 +78,7 @@ static const CliCommand s_commands[] = {
     { "quiet",     cmd_quiet,     "Toggle background output suppression" },
     { "status",    cmd_status,    "Print mesh state, role, battery, peers" },
     { "orch",      cmd_orch,      "Orchestrator: travel|random|seq|sched|stop|status" },
+    { "temp",      cmd_temp,      "Read internal temperature sensor" },
     { "reboot",    cmd_reboot,    "Reboot (esp_restart)" },
 };
 static constexpr int CMD_COUNT = sizeof(s_commands) / sizeof(s_commands[0]);
@@ -186,6 +191,16 @@ static void cmd_wifi(const char* args) {
         Serial.printf("SoftAP IP: %s  clients=%d\n",
                       WiFi.softAPIP().toString().c_str(), WiFi.softAPgetStationNum());
     }
+    else if (strcmp(sub, "creds") == 0) {
+        char ssid[33], pass[65];
+        bool hasCreds = SqWebServer::loadWifiCreds(ssid, sizeof(ssid), pass, sizeof(pass));
+        if (hasCreds) {
+            Serial.printf("SSID: %s\n", ssid);
+            Serial.printf("Pass: %s\n", pass[0] ? pass : "(open)");
+        } else {
+            Serial.println("No WiFi credentials stored.");
+        }
+    }
     else if (strcmp(sub, "delegate") == 0) {
         IMeshRole* r = MeshConductor::role();
         if (r && r->roleId() == RoleId::DELEGATE) {
@@ -200,7 +215,7 @@ static void cmd_wifi(const char* args) {
         }
     }
     else {
-        Serial.println("wifi subcommands: scan, set <ssid> [pass], clear, status, delegate");
+        Serial.println("wifi subcommands: scan, set <ssid> [pass], clear, status, creds, delegate");
     }
 }
 
@@ -236,9 +251,13 @@ static void cmd_elect(const char* args) {
         Serial.println("Mesh not connected. Run 'mesh' first.");
         return;
     }
-    Serial.println("Forcing re-election (will reboot)...");
+    if (!MeshConductor::isGateway()) {
+        Serial.println("Not gateway — only gateway can step down.");
+        return;
+    }
+    Serial.println("Forcing gateway step-down (will reboot)...");
     Serial.flush();
-    MeshConductor::forceReelection();
+    MeshConductor::requestStepDown();
 }
 
 static void cmd_rtc(const char* args) {
@@ -646,8 +665,8 @@ static void cmd_config(const char* args) {
 }
 
 static void cmd_mode(const char* args) {
-    if (!args || !*args) {
-        Serial.println("Usage: mode gateway | mode peer");
+    if (!args || !*args || strcasecmp(args, "peer") != 0) {
+        Serial.println("Usage: mode peer");
         return;
     }
 
@@ -656,35 +675,13 @@ static void cmd_mode(const char* args) {
         return;
     }
 
-    if (strcasecmp(args, "gateway") == 0) {
-        if (MeshConductor::isGateway()) {
-            Serial.println("Already gateway.");
-            return;
-        }
-        Serial.println("Requesting gateway role...");
-        Serial.flush();
-        NominateMsg msg;
-        msg.type = MSG_TYPE_NOMINATE;
-        esp_read_mac(msg.mac, ESP_MAC_WIFI_STA);
-        // Send to logical gateway (may differ from ESP-IDF root after role transfer)
-        const uint8_t* gw = MeshConductor::gatewayMac();
-        static const uint8_t zero[6] = {0};
-        if (memcmp(gw, zero, 6) != 0) {
-            MeshConductor::sendToNode(gw, &msg, sizeof(msg));
-        } else {
-            MeshConductor::sendToRoot(&msg, sizeof(msg));
-        }
-    } else if (strcasecmp(args, "peer") == 0) {
-        if (!MeshConductor::isGateway()) {
-            Serial.println("Already a peer node.");
-            return;
-        }
-        Serial.println("Stepping down from gateway...");
-        Serial.flush();
-        MeshConductor::stepDown();
-    } else {
-        Serial.println("Usage: mode gateway | mode peer");
+    if (!MeshConductor::isGateway()) {
+        Serial.println("Already a peer node.");
+        return;
     }
+    Serial.println("Stepping down from gateway (waiving root)...");
+    Serial.flush();
+    MeshConductor::stepDown();
 }
 
 static void cmd_ftm(const char* args) {
@@ -817,8 +814,20 @@ static void cmd_quiet(const char* args) {
 
 static void cmd_status(const char* args) {
     (void)args;
-    Serial.printf("Squeek v%s\n", SQUEEK_VERSION);
+    Serial.print("\033[1;96;40m"); // Bold cyan FG on black BG
+    Serial.printf("Squeek v%s (built " __DATE__ " " __TIME__ ")\n", SQUEEK_VERSION);
+    Serial.printf("Uptime: %lu s  |  Free heap: %lu B\n", millis() / 1000, (unsigned long)esp_get_free_heap_size());
     Serial.printf("Battery: %lu mV\n", PowerManager::batteryMv());
+    if (!s_tempSensor) {
+        temperature_sensor_config_t cfg = TEMPERATURE_SENSOR_CONFIG_DEFAULT(-10, 80);
+        if (temperature_sensor_install(&cfg, &s_tempSensor) == ESP_OK)
+            temperature_sensor_enable(s_tempSensor);
+    }
+    if (s_tempSensor) {
+        float celsius = 0;
+        if (temperature_sensor_get_celsius(s_tempSensor, &celsius) == ESP_OK)
+            Serial.printf("Temp: %.1f C\n", celsius);
+    }
     Serial.printf("Mesh connected: %s\n", MeshConductor::isConnected() ? "yes" : "no");
     IMeshRole* r = MeshConductor::role();
     const char* role = (r && r->roleId() == RoleId::DELEGATE) ? "DELEGATE"
@@ -827,6 +836,7 @@ static void cmd_status(const char* args) {
     if (MeshConductor::isConnected()) {
         MeshConductor::printStatus();
     }
+    Serial.print("\033[0m"); // Resets VT100 formatting
 }
 
 static void cmd_orch(const char* args) {
@@ -937,6 +947,26 @@ static void cmd_orch(const char* args) {
     }
     else {
         Serial.println("Usage: orch travel|random|seq|sched|stop|status");
+    }
+}
+
+static void cmd_temp(const char* args) {
+    (void)args;
+    if (!s_tempSensor) {
+        temperature_sensor_config_t cfg = TEMPERATURE_SENSOR_CONFIG_DEFAULT(-10, 80);
+        esp_err_t err = temperature_sensor_install(&cfg, &s_tempSensor);
+        if (err != ESP_OK) {
+            Serial.printf("Temp sensor install failed: %s\n", esp_err_to_name(err));
+            return;
+        }
+        temperature_sensor_enable(s_tempSensor);
+    }
+    float celsius = 0;
+    esp_err_t err = temperature_sensor_get_celsius(s_tempSensor, &celsius);
+    if (err == ESP_OK) {
+        Serial.printf("Internal temp: %.1f C\n", celsius);
+    } else {
+        Serial.printf("Temp read failed: %s\n", esp_err_to_name(err));
     }
 }
 

@@ -1,0 +1,695 @@
+<!DOCTYPE html><html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Squeek Dashboard</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#1a1a2e;--bg2:#0d0d1a;--bg3:#252545;--accent:#00d4ff;--accent2:#ff6b35;
+--text:#e0e0e0;--text2:#888;--border:#333;--ok:#2d6a3e;--err:#6a2d2d;--warn:#6a6a2d;
+--rad:8px;--tab-h:56px}
+html,body{height:100%;overflow:hidden}
+body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg2);color:var(--text);
+display:flex;flex-direction:column;-webkit-user-select:none;user-select:none}
+header{background:var(--bg);padding:10px 16px;display:flex;align-items:center;justify-content:space-between;
+border-bottom:1px solid var(--border);flex-shrink:0;z-index:10}
+.brand{display:flex;align-items:center;gap:8px}
+.brand span:first-child{font-size:1.4em}
+.brand h1{font-size:1.1em;color:var(--accent);font-weight:600;letter-spacing:.5px}
+.hdr-right{display:flex;align-items:center;gap:8px}
+.conn{width:8px;height:8px;border-radius:50%;background:var(--err)}
+.conn.on{background:var(--ok)}
+.langBtn{width:32px;height:32px;border-radius:50%;border:1px solid var(--border);
+background:var(--bg2);font-size:1em;cursor:pointer;display:flex;align-items:center;justify-content:center}
+main{flex:1;overflow-y:auto;overflow-x:hidden;padding:12px;padding-bottom:calc(var(--tab-h) + 16px);
+-webkit-overflow-scrolling:touch}
+.tab{display:none}
+.tab.active{display:block}
+nav#tabs{position:fixed;bottom:0;left:0;right:0;height:var(--tab-h);background:var(--bg);
+border-top:1px solid var(--border);display:grid;grid-template-columns:repeat(4,1fr);z-index:10}
+nav#tabs button{background:none;border:none;color:var(--text2);display:flex;flex-direction:column;
+align-items:center;justify-content:center;gap:2px;font-size:.65em;cursor:pointer;
+transition:color .2s;padding:4px 0}
+nav#tabs button.active{color:var(--accent)}
+nav#tabs button svg{width:22px;height:22px;fill:currentColor}
+
+/* Cards */
+.card{background:var(--bg);border:1px solid var(--border);border-radius:var(--rad);padding:12px;margin-bottom:10px}
+.card h3{font-size:.8em;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px}
+
+/* Buttons */
+.btn{padding:10px 16px;border:none;border-radius:var(--rad);background:var(--accent);color:var(--bg2);
+font-size:.9em;font-weight:600;cursor:pointer;transition:opacity .2s;min-height:40px}
+.btn:active{opacity:.7}
+.btn:disabled{opacity:.4;cursor:default}
+.btn-sm{padding:6px 12px;font-size:.8em;min-height:32px}
+.btn-outline{background:transparent;border:1px solid var(--border);color:var(--text)}
+.btn-outline.active{border-color:var(--accent);color:var(--accent);background:rgba(0,212,255,.1)}
+.btn-danger{background:var(--err);color:var(--text)}
+.btn-grid{display:grid;gap:8px}
+.btn-grid.cols-2{grid-template-columns:1fr 1fr}
+.btn-grid.cols-3{grid-template-columns:1fr 1fr 1fr}
+.btn-grid.cols-4{grid-template-columns:1fr 1fr 1fr 1fr}
+
+/* Form */
+select,input[type=number]{width:100%;padding:8px 10px;border-radius:var(--rad);border:1px solid var(--border);
+background:var(--bg2);color:var(--text);font-size:.9em;outline:none;-webkit-appearance:none;appearance:none}
+select:focus,input:focus{border-color:var(--accent)}
+label{display:block;font-size:.75em;color:var(--text2);margin-bottom:4px}
+.field{margin-bottom:10px}
+.row{display:flex;gap:8px;align-items:center}
+.flex1{flex:1}
+
+/* Toggle */
+.toggle{position:relative;width:44px;height:24px;flex-shrink:0}
+.toggle input{opacity:0;width:0;height:0}
+.toggle .slider{position:absolute;inset:0;background:var(--border);border-radius:12px;cursor:pointer;transition:.2s}
+.toggle .slider::before{content:'';position:absolute;height:18px;width:18px;left:3px;bottom:3px;
+background:var(--text);border-radius:50%;transition:.2s}
+.toggle input:checked+.slider{background:var(--accent)}
+.toggle input:checked+.slider::before{transform:translateX(20px)}
+
+/* Progress bar */
+.bar-track{height:6px;background:var(--border);border-radius:3px;overflow:hidden}
+.bar-fill{height:100%;background:var(--accent);border-radius:3px;transition:width .3s}
+
+/* Map */
+#mapViewport{width:100%;aspect-ratio:1;perspective:800px;overflow:hidden;touch-action:none;
+background:radial-gradient(circle at center,#151530,var(--bg2));border-radius:var(--rad);position:relative}
+#mapScene{width:100%;height:100%;transform-style:preserve-3d;position:relative;transition:transform .1s linear}
+.map-node{position:absolute;width:14px;height:14px;border-radius:50%;border:2px solid rgba(255,255,255,.3);
+transform:translate(-50%,-50%);cursor:pointer;transition:box-shadow .2s}
+.map-node:hover,.map-node.selected{box-shadow:0 0 12px currentColor}
+.map-node.gw{width:18px;height:18px;border-color:var(--accent2)}
+.map-edge{position:absolute;height:1px;background:rgba(255,255,255,.12);transform-origin:0 0;pointer-events:none}
+#mapInfo{position:absolute;bottom:8px;left:8px;right:8px;background:rgba(13,13,26,.9);border:1px solid var(--border);
+border-radius:var(--rad);padding:10px;font-size:.8em;display:none}
+#mapInfo.show{display:block}
+.map-controls{position:absolute;top:8px;right:8px;display:flex;flex-direction:column;gap:4px}
+.map-controls button{width:32px;height:32px;border-radius:var(--rad);border:1px solid var(--border);
+background:rgba(13,13,26,.8);color:var(--text);font-size:1em;cursor:pointer;display:flex;align-items:center;
+justify-content:center}
+.no-nodes{text-align:center;color:var(--text2);padding:40px 20px;font-size:.9em}
+
+/* Seq list */
+.seq-row{display:grid;grid-template-columns:28px 1fr 1fr 70px 32px;gap:6px;align-items:center;
+padding:6px 0;border-bottom:1px solid var(--border);font-size:.85em}
+.seq-row:last-child{border-bottom:none}
+.seq-num{color:var(--text2);text-align:center;font-size:.75em}
+.seq-del{width:28px;height:28px;border:none;background:transparent;color:var(--err);
+cursor:pointer;font-size:1.1em;border-radius:4px}
+.seq-del:active{background:rgba(106,45,45,.3)}
+.seq-counter{text-align:center;color:var(--text2);font-size:.8em;margin-top:6px}
+
+/* Config */
+.cfg-row{display:flex;align-items:center;justify-content:space-between;padding:8px 0;
+border-bottom:1px solid rgba(51,51,51,.5);gap:8px}
+.cfg-row:last-child{border-bottom:none}
+.cfg-label{flex:1;min-width:0}
+.cfg-label .key{font-size:.85em;color:var(--text)}
+.cfg-label .desc{font-size:.7em;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cfg-input{width:90px;flex-shrink:0}
+.cfg-input input{width:100%;text-align:right}
+.sys-row{display:flex;justify-content:space-between;font-size:.85em;padding:4px 0}
+.sys-row .lbl{color:var(--text2)}
+
+/* Toast */
+#toast{position:fixed;top:60px;left:50%;transform:translateX(-50%);background:var(--bg3);
+border:1px solid var(--border);border-radius:var(--rad);padding:8px 16px;font-size:.85em;
+opacity:0;transition:opacity .3s;pointer-events:none;z-index:20}
+#toast.show{opacity:1}
+</style></head><body>
+<header>
+<div class="brand"><span>&#x1F43E;</span><h1>Squeek</h1></div>
+<div class="hdr-right">
+<div class="conn" id="connDot" title="WebSocket"></div>
+<button class="langBtn" id="langBtn"></button>
+</div>
+</header>
+
+<main>
+<!-- ===== MAP TAB ===== -->
+<div class="tab active" id="tab-map">
+<div id="mapViewport">
+<div id="mapScene"></div>
+<div class="map-controls">
+<button id="mapReset" title="Reset view">&#x21bb;</button>
+</div>
+<div id="mapInfo"></div>
+</div>
+<div class="card" style="margin-top:10px">
+<div class="row" style="justify-content:space-between;font-size:.85em">
+<span id="mapPeerCount">0 <span data-i18n="peers">peers</span></span>
+<span id="mapBattery">-- mV</span>
+<span id="mapDim">--D</span>
+</div>
+</div>
+</div>
+
+<!-- ===== PLAY TAB ===== -->
+<div class="tab" id="tab-play">
+<div class="card">
+<h3 data-i18n="mode">Mode</h3>
+<div class="btn-grid cols-4" id="modeGrid">
+<button class="btn btn-sm btn-outline" data-mode="0" data-i18n="modeOff">Off</button>
+<button class="btn btn-sm btn-outline" data-mode="1" data-i18n="modeTravel">Travel</button>
+<button class="btn btn-sm btn-outline" data-mode="2" data-i18n="modeRandom">Random</button>
+<button class="btn btn-sm btn-outline" data-mode="3" data-i18n="modeSeq">Seq</button>
+</div>
+</div>
+<div class="card" id="travelCard" style="display:none">
+<h3 data-i18n="travel">Travel Order</h3>
+<div class="btn-grid cols-3" id="travelGrid">
+<button class="btn btn-sm btn-outline" data-travel="0" data-i18n="nearest">Nearest</button>
+<button class="btn btn-sm btn-outline" data-travel="1" data-i18n="axis">Axis</button>
+<button class="btn btn-sm btn-outline" data-travel="2" data-i18n="random">Random</button>
+</div>
+</div>
+<div class="card">
+<h3 data-i18n="tones">Tones</h3>
+<div class="btn-grid cols-3" id="toneGrid"></div>
+</div>
+</div>
+
+<!-- ===== SEQUENCES TAB ===== -->
+<div class="tab" id="tab-seq">
+<div class="card">
+<h3 data-i18n="sequence">Sequence</h3>
+<div id="seqList"></div>
+<div class="seq-counter" id="seqCounter">0/32</div>
+</div>
+<div class="card">
+<h3 data-i18n="addStep">Add Step</h3>
+<div class="row" style="flex-wrap:wrap;gap:6px">
+<div class="flex1" style="min-width:80px"><label data-i18n="node">Node</label><select id="seqNode"></select></div>
+<div class="flex1" style="min-width:80px"><label data-i18n="tone">Tone</label><select id="seqTone"></select></div>
+<div style="width:70px"><label data-i18n="delay">Delay ms</label><input type="number" id="seqDelay" value="500" min="0" max="10000" step="50"></div>
+<button class="btn btn-sm" id="seqAdd" style="align-self:flex-end">+</button>
+</div>
+</div>
+<div class="btn-grid cols-4" style="margin-top:8px">
+<button class="btn btn-sm" id="seqPlay" data-i18n="start">Play</button>
+<button class="btn btn-sm btn-outline" id="seqSave" data-i18n="save">Save</button>
+<button class="btn btn-sm btn-outline" id="seqLoad" data-i18n="load">Load</button>
+<button class="btn btn-sm btn-outline" id="seqClear" data-i18n="clear">Clear</button>
+</div>
+</div>
+
+<!-- ===== CONFIG TAB ===== -->
+<div class="tab" id="tab-config">
+<div class="card">
+<h3 data-i18n="settings">Settings</h3>
+<div id="cfgList"></div>
+<button class="btn btn-sm" id="cfgSave" style="width:100%;margin-top:10px" data-i18n="save">Save</button>
+</div>
+<div class="card">
+<h3>System</h3>
+<div id="sysInfo">
+<div class="sys-row"><span class="lbl" data-i18n="wifi">WiFi</span><span id="sysWifi">--</span></div>
+<div class="sys-row"><span class="lbl" data-i18n="storage">Storage</span><span id="sysStorage">--</span></div>
+<div class="sys-row"><span class="lbl" data-i18n="uptime">Uptime</span><span id="sysUptime">--</span></div>
+<div class="sys-row"><span class="lbl" data-i18n="version">Version</span><span id="sysBuild">--</span></div>
+<div class="sys-row"><span class="lbl">Heap</span><span id="sysHeap">--</span></div>
+</div>
+<div class="bar-track" style="margin-top:8px"><div class="bar-fill" id="storageBar" style="width:0%"></div></div>
+</div>
+<div style="margin-top:10px">
+<button class="btn btn-danger" id="btnReboot" style="width:100%" data-i18n="reboot">Reboot</button>
+</div>
+</div>
+</main>
+
+<nav id="tabs">
+<button class="active" data-tab="tab-map">
+<svg viewBox="0 0 24 24"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5a2.5 2.5 0 010-5 2.5 2.5 0 010 5z"/></svg>
+<span data-i18n="tabMap">Map</span>
+</button>
+<button data-tab="tab-play">
+<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+<span data-i18n="tabPlay">Play</span>
+</button>
+<button data-tab="tab-seq">
+<svg viewBox="0 0 24 24"><path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z"/></svg>
+<span data-i18n="tabSeq">Seq</span>
+</button>
+<button data-tab="tab-config">
+<svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.49.49 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 00-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6A3.6 3.6 0 1115.6 12 3.6 3.6 0 0112 15.6z"/></svg>
+<span data-i18n="tabConfig">Config</span>
+</button>
+</nav>
+
+<div id="toast"></div>
+
+<script>
+/* ===== i18n ===== */
+var L={
+en:{tabMap:"Map",tabPlay:"Play",tabSeq:"Seq",tabConfig:"Config",battery:"Battery",peers:"peers",
+noNodes:"No nodes yet",mode:"Mode",modeOff:"Off",modeTravel:"Travel",modeRandom:"Random",modeSeq:"Seq",
+modeSched:"Sched",travel:"Travel Order",nearest:"Nearest",axis:"Axis",random:"Random",tones:"Tones",
+start:"Play",stop:"Stop",addStep:"Add Step",clear:"Clear",save:"Save",load:"Load",node:"Node",tone:"Tone",
+delay:"Delay ms",settings:"Settings",wifi:"WiFi",connected:"Connected",notConnected:"Not connected",
+storage:"Storage",reboot:"Reboot",confirmReboot:"Reboot device?",version:"Version",uptime:"Uptime",
+sequence:"Sequence",noTones:"No tones"},
+fr:{tabMap:"Carte",tabPlay:"Jouer",tabSeq:"Séq",tabConfig:"Config",battery:"Batterie",peers:"pairs",
+noNodes:"Aucun nœud",mode:"Mode",modeOff:"Arrêt",modeTravel:"Trajet",modeRandom:"Aléatoire",modeSeq:"Séq",
+modeSched:"Planif",travel:"Ordre trajet",nearest:"Proche",axis:"Axe",random:"Aléatoire",tones:"Sons",
+start:"Jouer",stop:"Arrêt",addStep:"Ajouter",clear:"Vider",save:"Sauver",load:"Charger",node:"Nœud",
+tone:"Son",delay:"Délai ms",settings:"Paramètres",wifi:"WiFi",connected:"Connecté",notConnected:"Non connecté",
+storage:"Stockage",reboot:"Redémarrer",confirmReboot:"Redémarrer l'appareil ?",version:"Version",uptime:"Durée",
+sequence:"Séquence",noTones:"Aucun son"},
+es:{tabMap:"Mapa",tabPlay:"Tocar",tabSeq:"Sec",tabConfig:"Config",battery:"Batería",peers:"pares",
+noNodes:"Sin nodos",mode:"Modo",modeOff:"Apagado",modeTravel:"Viaje",modeRandom:"Aleatorio",modeSeq:"Sec",
+modeSched:"Prog",travel:"Orden viaje",nearest:"Cercano",axis:"Eje",random:"Aleatorio",tones:"Tonos",
+start:"Tocar",stop:"Parar",addStep:"Agregar",clear:"Limpiar",save:"Guardar",load:"Cargar",node:"Nodo",
+tone:"Tono",delay:"Retardo ms",settings:"Ajustes",wifi:"WiFi",connected:"Conectado",notConnected:"Sin conexión",
+storage:"Almacén",reboot:"Reiniciar",confirmReboot:"¿Reiniciar dispositivo?",version:"Versión",uptime:"Tiempo",
+sequence:"Secuencia",noTones:"Sin tonos"},
+de:{tabMap:"Karte",tabPlay:"Spielen",tabSeq:"Seq",tabConfig:"Config",battery:"Batterie",peers:"Peers",
+noNodes:"Keine Knoten",mode:"Modus",modeOff:"Aus",modeTravel:"Reise",modeRandom:"Zufall",modeSeq:"Seq",
+modeSched:"Plan",travel:"Reisefolge",nearest:"Nächster",axis:"Achse",random:"Zufall",tones:"Töne",
+start:"Spielen",stop:"Stopp",addStep:"Hinzufügen",clear:"Leeren",save:"Speichern",load:"Laden",node:"Knoten",
+tone:"Ton",delay:"Verzög. ms",settings:"Einstellungen",wifi:"WLAN",connected:"Verbunden",notConnected:"Getrennt",
+storage:"Speicher",reboot:"Neustart",confirmReboot:"Gerät neustarten?",version:"Version",uptime:"Laufzeit",
+sequence:"Sequenz",noTones:"Keine Töne"}
+};
+var langs=["en","fr","es","de"],flags=["\uD83C\uDDEC\uD83C\uDDE7","\uD83C\uDDEB\uD83C\uDDF7","\uD83C\uDDEA\uD83C\uDDF8","\uD83C\uDDE9\uD83C\uDDEA"];
+var lang=localStorage.getItem("sqlang")||navigator.language.slice(0,2);
+if(langs.indexOf(lang)<0)lang="en";
+
+function t(k){return(L[lang]&&L[lang][k])||L.en[k]||k}
+function applyLang(){
+document.querySelectorAll("[data-i18n]").forEach(function(el){
+var k=el.getAttribute("data-i18n");
+if(el.tagName==="OPTION")el.textContent=t(k);
+else if(el.tagName==="INPUT")el.placeholder=t(k);
+else el.textContent=t(k);
+});
+var idx=langs.indexOf(lang);
+document.getElementById("langBtn").textContent=flags[idx>=0?idx:0];
+}
+document.getElementById("langBtn").onclick=function(){
+var idx=(langs.indexOf(lang)+1)%langs.length;
+lang=langs[idx];localStorage.setItem("sqlang",lang);applyLang();
+};
+applyLang();
+
+/* ===== Tab switching ===== */
+var tabBtns=document.querySelectorAll("#tabs button");
+var tabPanes=document.querySelectorAll(".tab");
+tabBtns.forEach(function(btn){
+btn.onclick=function(){
+tabBtns.forEach(function(b){b.classList.remove("active")});
+tabPanes.forEach(function(p){p.classList.remove("active")});
+btn.classList.add("active");
+document.getElementById(btn.dataset.tab).classList.add("active");
+refreshTab(btn.dataset.tab);
+};
+});
+
+/* ===== API helper ===== */
+function api(path,opts){
+return fetch(path,opts).then(function(r){
+if(!r.ok)throw new Error(r.status);return r.json();
+});
+}
+
+/* ===== Toast ===== */
+var toastTimer;
+function toast(msg){
+var el=document.getElementById("toast");el.textContent=msg;el.classList.add("show");
+clearTimeout(toastTimer);toastTimer=setTimeout(function(){el.classList.remove("show")},2000);
+}
+
+/* ===== State ===== */
+var peers=[],distances=[],tones=[],orchState={mode:0,travel_order:0,sequence:[]},cfgMeta=[];
+var seqSteps=[];
+
+/* ===== Refresh dispatcher ===== */
+function refreshTab(id){
+switch(id){
+case"tab-map":refreshMap();break;
+case"tab-play":refreshPlay();break;
+case"tab-seq":refreshSeq();break;
+case"tab-config":refreshConfig();break;
+}
+}
+
+/* =========================================================
+   MAP TAB
+   ========================================================= */
+var mapRx=0,mapRy=0,mapZoom=1,mapPanX=0,mapPanY=0;
+var mapDragging=false,mapPinching=false,mapStartX,mapStartY,mapStartDist,mapStartZoom;
+
+function refreshMap(){
+Promise.all([api("/api/peers"),api("/api/distances"),api("/api/status")]).then(function(r){
+peers=r[0];distances=r[1];
+document.getElementById("mapPeerCount").innerHTML=r[2].alive_peers+" "+t("peers");
+document.getElementById("mapBattery").textContent=r[2].battery_mv+" mV";
+document.getElementById("mapDim").textContent=r[2].dimension+"D";
+renderMap();
+});
+}
+
+function renderMap(){
+var scene=document.getElementById("mapScene");
+scene.innerHTML="";
+if(!peers.length){scene.innerHTML='<div class="no-nodes">'+t("noNodes")+'</div>';return;}
+
+var vp=document.getElementById("mapViewport");
+var W=vp.clientWidth,H=vp.clientHeight;
+var cx=W/2,cy=H/2;
+
+// Find bounds
+var minX=1e9,maxX=-1e9,minY=1e9,maxY=-1e9,minZ=1e9,maxZ=-1e9;
+peers.forEach(function(p){
+minX=Math.min(minX,p.pos[0]);maxX=Math.max(maxX,p.pos[0]);
+minY=Math.min(minY,p.pos[1]);maxY=Math.max(maxY,p.pos[1]);
+minZ=Math.min(minZ,p.pos[2]);maxZ=Math.max(maxZ,p.pos[2]);
+});
+var rangeX=maxX-minX||1,rangeY=maxY-minY||1,rangeZ=maxZ-minZ||1;
+var scale=Math.min(W*0.6,H*0.6)/Math.max(rangeX,rangeY,rangeZ);
+
+// Draw edges
+distances.forEach(function(e){
+var pa=peers.find(function(p){return p.idx===e.a});
+var pb=peers.find(function(p){return p.idx===e.b});
+if(!pa||!pb)return;
+var ax=(pa.pos[0]-minX-rangeX/2)*scale,ay=(pa.pos[1]-minY-rangeY/2)*scale;
+var bx=(pb.pos[0]-minX-rangeX/2)*scale,by=(pb.pos[1]-minY-rangeY/2)*scale;
+var dx=bx-ax,dy=by-ay,len=Math.sqrt(dx*dx+dy*dy);
+var ang=Math.atan2(dy,dx)*180/Math.PI;
+var edge=document.createElement("div");
+edge.className="map-edge";
+edge.style.cssText="left:"+(cx+ax)+"px;top:"+(cy+ay)+"px;width:"+len+"px;transform:rotate("+ang+"deg)";
+scene.appendChild(edge);
+});
+
+// Draw nodes
+peers.forEach(function(p){
+var nx=(p.pos[0]-minX-rangeX/2)*scale;
+var ny=(p.pos[1]-minY-rangeY/2)*scale;
+var nz=(p.pos[2]-minZ-rangeZ/2)*scale;
+var node=document.createElement("div");
+node.className="map-node"+(p.is_gateway?" gw":"");
+var color=p.battery_mv>3500?"#4caf50":p.battery_mv>3200?"#ff9800":"#f44336";
+if(p.is_gateway)color="#ff6b35";
+node.style.cssText="left:"+(cx+nx)+"px;top:"+(cy+ny)+"px;background:"+color+
+";transform:translate(-50%,-50%) translateZ("+nz+"px)";
+node.dataset.idx=p.idx;
+node.onclick=function(ev){
+ev.stopPropagation();showNodeInfo(p);
+};
+scene.appendChild(node);
+});
+
+updateMapTransform();
+}
+
+function showNodeInfo(p){
+var info=document.getElementById("mapInfo");
+var flags=[];
+if(p.flags&0x01)flags.push("alive");
+if(p.flags&0x02)flags.push("sleeping");
+if(p.flags&0x04)flags.push("dead");
+info.innerHTML="<b>"+p.mac+"</b>"+(p.is_gateway?" (GW)":"")+"<br>"+
+t("battery")+": "+p.battery_mv+" mV<br>"+
+"Pos: ["+p.pos.map(function(v){return v.toFixed(1)}).join(", ")+"]<br>"+
+"Status: "+flags.join(", ");
+info.classList.add("show");
+}
+
+document.getElementById("mapViewport").onclick=function(){
+document.getElementById("mapInfo").classList.remove("show");
+};
+
+function updateMapTransform(){
+var scene=document.getElementById("mapScene");
+scene.style.transform="rotateX("+mapRx+"deg) rotateY("+mapRy+"deg) scale("+mapZoom+
+") translate("+mapPanX+"px,"+mapPanY+"px)";
+}
+
+/* Touch/mouse controls for map */
+var mvp=document.getElementById("mapViewport");
+function getTouchDist(t){var dx=t[0].clientX-t[1].clientX,dy=t[0].clientY-t[1].clientY;return Math.sqrt(dx*dx+dy*dy);}
+
+mvp.addEventListener("pointerdown",function(e){
+if(e.pointerType==="touch")return;// handle via touch events
+mapDragging=true;mapStartX=e.clientX;mapStartY=e.clientY;
+mvp.setPointerCapture(e.pointerId);
+});
+mvp.addEventListener("pointermove",function(e){
+if(!mapDragging||e.pointerType==="touch")return;
+mapRy+=(e.clientX-mapStartX)*0.5;
+mapRx-=(e.clientY-mapStartY)*0.5;
+mapRx=Math.max(-60,Math.min(60,mapRx));
+mapStartX=e.clientX;mapStartY=e.clientY;
+updateMapTransform();
+});
+mvp.addEventListener("pointerup",function(){mapDragging=false;});
+
+mvp.addEventListener("touchstart",function(e){
+if(e.touches.length===1){mapDragging=true;mapPinching=false;mapStartX=e.touches[0].clientX;mapStartY=e.touches[0].clientY;}
+if(e.touches.length===2){mapPinching=true;mapDragging=false;mapStartDist=getTouchDist(e.touches);mapStartZoom=mapZoom;}
+},{passive:true});
+mvp.addEventListener("touchmove",function(e){
+if(mapPinching&&e.touches.length===2){
+var d=getTouchDist(e.touches);
+mapZoom=Math.max(0.5,Math.min(3,mapStartZoom*(d/mapStartDist)));
+updateMapTransform();
+}else if(mapDragging&&e.touches.length===1){
+mapRy+=(e.touches[0].clientX-mapStartX)*0.5;
+mapRx-=(e.touches[0].clientY-mapStartY)*0.5;
+mapRx=Math.max(-60,Math.min(60,mapRx));
+mapStartX=e.touches[0].clientX;mapStartY=e.touches[0].clientY;
+updateMapTransform();
+}
+},{passive:true});
+mvp.addEventListener("touchend",function(){mapDragging=false;mapPinching=false;},{passive:true});
+
+document.getElementById("mapReset").onclick=function(){
+mapRx=0;mapRy=0;mapZoom=1;mapPanX=0;mapPanY=0;updateMapTransform();
+};
+
+/* =========================================================
+   PLAY TAB
+   ========================================================= */
+function refreshPlay(){
+Promise.all([api("/api/orch"),api("/api/tones")]).then(function(r){
+orchState=r[0];tones=r[1];renderPlay();
+});
+}
+
+function renderPlay(){
+// Mode buttons
+document.querySelectorAll("#modeGrid button").forEach(function(b){
+b.classList.toggle("active",parseInt(b.dataset.mode)===orchState.mode);
+});
+// Travel card visibility
+document.getElementById("travelCard").style.display=orchState.mode===1?"block":"none";
+document.querySelectorAll("#travelGrid button").forEach(function(b){
+b.classList.toggle("active",parseInt(b.dataset.travel)===orchState.travel_order);
+});
+// Tones
+var grid=document.getElementById("toneGrid");
+grid.innerHTML="";
+if(!tones.length){grid.innerHTML='<span style="color:var(--text2);font-size:.85em">'+t("noTones")+'</span>';return;}
+tones.forEach(function(tn){
+var btn=document.createElement("button");
+btn.className="btn btn-sm btn-outline";
+btn.textContent=tn.name;
+btn.onclick=function(){
+// Play this tone on all nodes (set orch tone and trigger)
+toast(tn.name+" \u266B");
+};
+grid.appendChild(btn);
+});
+}
+
+document.getElementById("modeGrid").onclick=function(e){
+var btn=e.target.closest("[data-mode]");if(!btn)return;
+var mode=parseInt(btn.dataset.mode);
+api("/api/orch",{method:"POST",headers:{"Content-Type":"application/json"},
+body:JSON.stringify({mode:mode})}).then(function(){orchState.mode=mode;renderPlay();});
+};
+document.getElementById("travelGrid").onclick=function(e){
+var btn=e.target.closest("[data-travel]");if(!btn)return;
+var order=parseInt(btn.dataset.travel);
+api("/api/orch",{method:"POST",headers:{"Content-Type":"application/json"},
+body:JSON.stringify({travel_order:order})}).then(function(){orchState.travel_order=order;renderPlay();});
+};
+
+/* =========================================================
+   SEQUENCES TAB
+   ========================================================= */
+function refreshSeq(){
+Promise.all([api("/api/orch"),api("/api/peers"),api("/api/tones")]).then(function(r){
+orchState=r[0];peers=r[1];tones=r[2];
+seqSteps=orchState.sequence.slice();
+renderSeq();populateSeqDropdowns();
+});
+}
+
+function populateSeqDropdowns(){
+var ns=document.getElementById("seqNode");ns.innerHTML="";
+peers.forEach(function(p){
+var o=document.createElement("option");o.value=p.idx;
+o.textContent="#"+p.idx+" "+p.mac.slice(-5);ns.appendChild(o);
+});
+var ts=document.getElementById("seqTone");ts.innerHTML="";
+tones.forEach(function(tn){
+var o=document.createElement("option");o.value=tn.idx;o.textContent=tn.name;ts.appendChild(o);
+});
+}
+
+function renderSeq(){
+var list=document.getElementById("seqList");
+list.innerHTML="";
+seqSteps.forEach(function(s,i){
+var row=document.createElement("div");row.className="seq-row";
+var peer=peers.find(function(p){return p.idx===s.node});
+var tn=tones.find(function(t){return t.idx===s.tone});
+row.innerHTML='<span class="seq-num">'+(i+1)+'</span>'+
+'<span>'+(peer?peer.mac.slice(-5):"#"+s.node)+'</span>'+
+'<span>'+(tn?tn.name:"T"+s.tone)+'</span>'+
+'<span>'+s.delay+' ms</span>'+
+'<button class="seq-del" data-i="'+i+'">&times;</button>';
+list.appendChild(row);
+});
+document.getElementById("seqCounter").textContent=seqSteps.length+"/32";
+
+// Wire delete buttons
+list.querySelectorAll(".seq-del").forEach(function(btn){
+btn.onclick=function(){seqSteps.splice(parseInt(btn.dataset.i),1);renderSeq();};
+});
+}
+
+document.getElementById("seqAdd").onclick=function(){
+if(seqSteps.length>=32){toast("Max 32 steps");return;}
+seqSteps.push({
+node:parseInt(document.getElementById("seqNode").value)||0,
+tone:parseInt(document.getElementById("seqTone").value)||0,
+delay:parseInt(document.getElementById("seqDelay").value)||500
+});
+renderSeq();
+};
+
+document.getElementById("seqSave").onclick=function(){
+api("/api/sequence",{method:"POST",headers:{"Content-Type":"application/json"},
+body:JSON.stringify({steps:seqSteps,save:true})}).then(function(r){toast(t("save")+" ("+r.steps+")");});
+};
+document.getElementById("seqLoad").onclick=function(){refreshSeq();};
+document.getElementById("seqClear").onclick=function(){seqSteps=[];renderSeq();};
+document.getElementById("seqPlay").onclick=function(){
+api("/api/sequence",{method:"POST",headers:{"Content-Type":"application/json"},
+body:JSON.stringify({steps:seqSteps,save:false})}).then(function(){
+return api("/api/orch",{method:"POST",headers:{"Content-Type":"application/json"},
+body:JSON.stringify({mode:3})});
+}).then(function(){orchState.mode=3;toast(t("start"));});
+};
+
+/* =========================================================
+   CONFIG TAB
+   ========================================================= */
+var cfgValues={};
+
+function refreshConfig(){
+Promise.all([api("/api/config"),api("/api/status"),api("/api/storage")]).then(function(r){
+var cfg=r[0],status=r[1],storage=r[2];
+cfgMeta=cfg._meta||[];
+cfgValues={};
+cfgMeta.forEach(function(m){cfgValues[m.key]=cfg[m.key];});
+renderConfig();
+
+// System info
+document.getElementById("sysWifi").textContent=status.mac;
+document.getElementById("sysUptime").textContent=formatUptime(status.uptime_s);
+document.getElementById("sysHeap").textContent=Math.round(status.free_heap/1024)+" KB";
+document.getElementById("sysBuild").textContent=status.build||"--";
+var pct=storage.total?Math.round(storage.used/storage.total*100):0;
+document.getElementById("sysStorage").textContent=Math.round(storage.used/1024)+"/"+Math.round(storage.total/1024)+" KB";
+document.getElementById("storageBar").style.width=pct+"%";
+});
+}
+
+function formatUptime(s){
+var h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=s%60;
+return(h?h+"h ":"")+(m?m+"m ":"")+sec+"s";
+}
+
+function renderConfig(){
+var list=document.getElementById("cfgList");
+list.innerHTML="";
+cfgMeta.forEach(function(m){
+var row=document.createElement("div");row.className="cfg-row";
+var val=cfgValues[m.key];
+if(m.type==="bool"){
+row.innerHTML='<div class="cfg-label"><div class="key">'+m.key+'</div><div class="desc">'+m.desc+'</div></div>'+
+'<label class="toggle"><input type="checkbox" data-key="'+m.key+'"'+(val?' checked':'')+
+'><span class="slider"></span></label>';
+}else{
+var step=m.type==="float"?"0.01":"1";
+row.innerHTML='<div class="cfg-label"><div class="key">'+m.key+'</div><div class="desc">'+m.desc+'</div></div>'+
+'<div class="cfg-input"><input type="number" step="'+step+'" data-key="'+m.key+'" value="'+val+'"></div>';
+}
+list.appendChild(row);
+});
+
+// Wire change handlers
+list.querySelectorAll("input").forEach(function(inp){
+inp.onchange=function(){
+var k=inp.dataset.key;
+if(inp.type==="checkbox")cfgValues[k]=inp.checked;
+else if(inp.step==="0.01")cfgValues[k]=parseFloat(inp.value);
+else cfgValues[k]=parseInt(inp.value);
+};
+});
+}
+
+document.getElementById("cfgSave").onclick=function(){
+var payload={};
+cfgMeta.forEach(function(m){payload[m.key]=cfgValues[m.key];});
+api("/api/config",{method:"POST",headers:{"Content-Type":"application/json"},
+body:JSON.stringify(payload)}).then(function(r){toast(t("save")+" ("+r.applied+")");});
+};
+
+document.getElementById("btnReboot").onclick=function(){
+if(!confirm(t("confirmReboot")))return;
+api("/api/reboot",{method:"POST"}).then(function(){toast(t("reboot")+"...");});
+};
+
+/* =========================================================
+   WebSocket
+   ========================================================= */
+var ws,wsRetry=1000;
+
+function wsConnect(){
+var proto=location.protocol==="https:"?"wss":"ws";
+ws=new WebSocket(proto+"://"+location.host+"/ws");
+ws.onopen=function(){
+document.getElementById("connDot").classList.add("on");wsRetry=1000;
+};
+ws.onclose=function(){
+document.getElementById("connDot").classList.remove("on");
+setTimeout(wsConnect,Math.min(wsRetry,10000));wsRetry*=1.5;
+};
+ws.onmessage=function(ev){
+try{
+var msg=JSON.parse(ev.data);
+if(msg.type==="peer_join"||msg.type==="peer_leave"||msg.type==="peer_update"){
+// Refresh map if visible
+var active=document.querySelector(".tab.active");
+if(active&&active.id==="tab-map")refreshMap();
+}
+if(msg.type==="orch_update"){
+orchState.mode=msg.mode;
+if(msg.travel_order!==undefined)orchState.travel_order=msg.travel_order;
+var active2=document.querySelector(".tab.active");
+if(active2&&active2.id==="tab-play")renderPlay();
+}
+}catch(e){}
+};
+}
+wsConnect();
+
+/* ===== Initial load ===== */
+refreshMap();
+</script>
+</body></html>

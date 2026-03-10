@@ -12,6 +12,7 @@ struct PeerSyncEntry;
 #define PEER_STATUS_SLEEPING  0x02
 #define PEER_STATUS_DEAD      0x04
 #define PEER_STATUS_FTM_READY 0x08
+#define PEER_STATUS_WAIVED    0x10
 
 struct PeerEntry {
     uint8_t  mac[6];

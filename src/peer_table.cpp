@@ -2,6 +2,7 @@
 #include "mesh_conductor.h"
 #include "nvs_config.h"
 #include "power_manager.h"
+#include "rtc_state.h"
 #include "sq_log.h"
 #include <Arduino.h>
 #include <esp_mac.h>
@@ -149,29 +150,57 @@ void PeerTable::scanStaleness() {
 }
 
 void PeerTable::checkReelection() {
-    // Cooldown: skip if too soon after the last re-election
+    // Cooldown: skip if too soon after the last step-down
     uint32_t cooldown_ms = (uint32_t)(uint16_t)NvsConfigManager::reelectionCooldown_s * 1000u;
     if (s_lastReelectionMs != 0 && (millis() - s_lastReelectionMs) < cooldown_ms)
         return;
 
     uint16_t gw_battery = s_entries[0].battery_mv;
-    uint16_t best_battery = 0;
-    // Asymmetric threshold: dethrone requires a larger delta than initial election
-    uint16_t dethrone = (uint16_t)NvsConfigManager::reelectionDethrone_mv;
+    uint16_t hysteresis = (uint16_t)NvsConfigManager::batteryHysteresis_mv;
 
+    // Battery recovery: if battery climbed above threshold + hysteresis, clear waived flag
+    rtc_state_t* rtc = RtcState::get();
+    if (rtc && rtc->waived_low_battery && gw_battery > (BATTERY_LOW_MV + hysteresis)) {
+        SqLog.printf("[ptable] Battery recovered (%u mV > %u) — clearing waived flag\n",
+            gw_battery, BATTERY_LOW_MV + hysteresis);
+        rtc->waived_low_battery = 0;
+        RtcState::save();
+        return;
+    }
+
+    // Not low enough to waive
+    if (gw_battery >= BATTERY_LOW_MV)
+        return;
+
+    // Already waived — don't waive again
+    if (rtc && rtc->waived_low_battery)
+        return;
+
+    // Check if any alive peer does NOT have PEER_STATUS_WAIVED (i.e. can take over)
+    bool haveCandidates = false;
     for (uint8_t i = 1; i < s_count; i++) {
         if (s_entries[i].flags & PEER_STATUS_DEAD)
             continue;
-        if (s_entries[i].battery_mv > best_battery)
-            best_battery = s_entries[i].battery_mv;
+        if (!(s_entries[i].flags & PEER_STATUS_WAIVED)) {
+            haveCandidates = true;
+            break;
+        }
     }
 
-    if (best_battery > gw_battery && (best_battery - gw_battery) >= dethrone) {
-        SqLog.printf("[ptable] Re-election: gateway battery %u mV, best peer %u mV (dethrone >= %u)\n",
-            gw_battery, best_battery, dethrone);
-        s_lastReelectionMs = millis();
-        MeshConductor::forceReelection();
+    if (!haveCandidates) {
+        SqLog.println("[ptable] All peers waived — last standing gateway, staying alive");
+        return;
     }
+
+    // Waive root — set flag, save, and request step-down
+    SqLog.printf("[ptable] Low battery (%u mV < %u) — waiving root\n",
+        gw_battery, BATTERY_LOW_MV);
+    if (rtc) {
+        rtc->waived_low_battery = 1;
+        RtcState::save();
+    }
+    s_lastReelectionMs = millis();
+    MeshConductor::requestStepDown();
 }
 
 PeerEntry* PeerTable::getEntry(const uint8_t* mac) {

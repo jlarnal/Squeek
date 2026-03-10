@@ -8,7 +8,6 @@
 // --- Message types for mesh data exchange ---
 
 enum MeshMsgType : uint8_t {
-    MSG_TYPE_ELECTION    = 0x01,
     MSG_TYPE_HEARTBEAT   = 0x10,   // peer → gateway
     MSG_TYPE_FTM_WAKE    = 0x20,   // gateway → pair
     MSG_TYPE_FTM_READY   = 0x21,   // node → gateway
@@ -17,10 +16,8 @@ enum MeshMsgType : uint8_t {
     MSG_TYPE_FTM_CANCEL  = 0x24,   // gateway → pair (abort)
     MSG_TYPE_POS_UPDATE  = 0x30,   // gateway → all
     MSG_TYPE_PEER_SYNC   = 0x31,   // gateway → all (peer table broadcast)
-    MSG_TYPE_NOMINATE    = 0x40,   // peer → gateway (request gateway role)
     MSG_TYPE_CONFIG_REQ  = 0x50,   // any node → target node
     MSG_TYPE_CONFIG_RESP = 0x51,   // target node → requester
-    MSG_TYPE_ROLE_CHANGE = 0x60,   // gateway → all (new gateway MAC)
     MSG_TYPE_PLAY_CMD    = 0x70,   // gateway → node: play tone
     MSG_TYPE_ORCH_MODE   = 0x71,   // gateway → all: mode changed
     MSG_TYPE_CLOCK_SYNC  = 0x72,   // gateway → all: time sync
@@ -30,17 +27,10 @@ enum MeshMsgType : uint8_t {
     MSG_TYPE_MERGE_CHECK     = 0x82,  // delegate → broadcast: split-mesh healing
     MSG_TYPE_SETUP_DELEGATE  = 0x83,  // gateway → peer: designate as delegate
     MSG_TYPE_DELEGATE_RESULT = 0x84,  // peer → gateway: delegation outcome
-};
-
-// --- Election score broadcast packet ---
-
-struct __attribute__((packed)) ElectionScore {
-    uint8_t  type;              // MSG_TYPE_ELECTION
-    uint8_t  mac[6];
-    uint16_t battery_mv;
-    uint8_t  peer_count;        // number of peers this node can see
-    uint16_t gateway_tenure;    // times this node has been gateway (from NVS)
-    double   score;             // pre-computed score (double for overflow safety)
+    MSG_TYPE_SCAN_REQUEST    = 0x85,  // gateway → all: "scan WiFi and report"
+    MSG_TYPE_SCAN_RESULT     = 0x86,  // peer → gateway: scan result (ssid count)
+    MSG_TYPE_DELEGATE_TICKET = 0x87,  // old gateway → new gateway: delegate tracking
+    MSG_TYPE_DELEGATE_TICKET_ACK = 0x88,  // new gateway → old gateway
 };
 
 // --- Heartbeat message (peer → gateway) ---
@@ -115,20 +105,6 @@ struct __attribute__((packed)) PeerSyncMsg {
 };
 // 2 + 16×15 = 242 bytes max (fits 256-byte rx_buf)
 
-// --- Nominate message (peer → gateway) ---
-
-struct __attribute__((packed)) NominateMsg {
-    uint8_t type;    // MSG_TYPE_NOMINATE
-    uint8_t mac[6];  // STA MAC of node requesting gateway role
-};
-
-// --- Role change message (gateway → all) ---
-
-struct __attribute__((packed)) RoleChangeMsg {
-    uint8_t type;        // MSG_TYPE_ROLE_CHANGE
-    uint8_t new_gw[6];   // STA MAC of new gateway
-};
-
 // --- Phase 4: Orchestrator messages ---
 
 struct __attribute__((packed)) PlayCmdMsg {
@@ -173,6 +149,22 @@ struct __attribute__((packed)) DelegateResultMsg {
     uint8_t success;         // nonzero = creds obtained
 };
 
+struct __attribute__((packed)) ScanRequestMsg {
+    uint8_t type;            // MSG_TYPE_SCAN_REQUEST
+};
+
+struct __attribute__((packed)) ScanResultMsg {
+    uint8_t type;            // MSG_TYPE_SCAN_RESULT
+    uint8_t mac[6];          // STA MAC of reporting peer
+    uint8_t ssid_count;      // number of unique SSIDs found
+};
+
+struct __attribute__((packed)) DelegateTicketMsg {
+    uint8_t  type;           // MSG_TYPE_DELEGATE_TICKET
+    uint8_t  delegate_mac[6];
+    uint16_t remaining_s;    // monotonic countdown, floors at zero
+};
+
 // --- Role identifier ---
 
 enum class RoleId : uint8_t { PEER = 0, GATEWAY = 1, DELEGATE = 2 };
@@ -200,6 +192,12 @@ public:
     void onPeerLeft(const uint8_t* mac) override;
     RoleId roleId() const override { return RoleId::GATEWAY; }
     void printStatus() override;
+    void startDelegation();           // button-triggered: scan contest or self-delegate
+    void onScanResult(const uint8_t* mac, uint8_t ssid_count);
+    bool hasDelegateTicket() const;   // true if a delegate is out (remaining_s > 0)
+    void installTicket(const uint8_t* delegateMac, uint16_t remaining_s);
+    void transferTicket(const uint8_t* newGwMac);  // send ticket to new GW before stepping down
+    void clearTicket();               // delegate returned — clear ticket
 private:
     uint8_t m_peerCount = 0;
 };
@@ -232,10 +230,6 @@ public:
     static void setRole(IMeshRole* role);
     static void printStatus();
 
-    // Election
-    static double computeScore();
-    static void runElection();
-
     // Messaging
     static esp_err_t sendToRoot(const void* data, uint16_t len);
     static esp_err_t sendToNode(const uint8_t* sta_mac, const void* data, uint16_t len);
@@ -250,19 +244,21 @@ public:
     static const uint8_t* gatewayMac();
     static void setGatewayMac(const uint8_t* mac);
 
-    // Role nomination
-    static void nominateNode(const uint8_t* sta_mac);  // gateway only
+    // Gateway step-down (waive root)
     static void stepDown();                              // gateway only
 
     // Remote config
     static bool sendConfigReq(const uint8_t* sta_mac, const char* json, uint8_t reqId);
     static bool waitConfigResp(char* outBuf, size_t bufSize, uint32_t timeout_ms);
 
-    // Fast-path boot
-    static void setFastBoot(bool fast);
+    // Cred push ACK tracking
+    static bool isCredAckReceived();
 
-    // Debug
-    static void forceReelection();
+    // BOOT button handler — routes to delegate based on current role
+    static void onBootButton();
+
+    // Battery rotation
+    static void requestStepDown();
 
 private:
     MeshConductor() = delete;
