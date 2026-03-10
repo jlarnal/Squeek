@@ -66,11 +66,9 @@ constexpr gpio_num_t PIEZO_PIN_B = GPIO_NUM_23;  // push-pull complement
 #define NVS_DEFAULT_BATTERY_HYST_MV    300
 
 // Phase 2: FTM
-#define NVS_DEFAULT_FTM_STALE_S        300
 #define NVS_DEFAULT_FTM_NEW_ANCHORS    5
-#define NVS_DEFAULT_FTM_SAMPLES        8
+#define NVS_DEFAULT_FTM_SAMPLES        32
 #define NVS_DEFAULT_FTM_PAIR_TMO_MS    3000
-#define NVS_DEFAULT_FTM_SWEEP_INT_S    600
 #define NVS_DEFAULT_FTM_KALMAN_PN      0.01f
 #define NVS_DEFAULT_FTM_RESP_OFS_CM    0
 

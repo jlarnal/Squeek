@@ -22,6 +22,7 @@
 #include <ArduinoJson.h>
 #include <esp_system.h>
 #include <esp_mac.h>
+#include <esp_wifi.h>
 #include <WiFi.h>
 #include <string.h>
 #include <driver/temperature_sensor.h>
@@ -29,27 +30,27 @@
 static temperature_sensor_handle_t s_tempSensor = nullptr;
 
 // --- Command handler prototypes ---
+static void cmd_battery(const char* args);
+static void cmd_broadcast(const char* args);
+static void cmd_config(const char* args);
+static void cmd_elect(const char* args);
+static void cmd_ftm(const char* args);
 static void cmd_help(const char* args);
 static void cmd_led(const char* args);
-static void cmd_battery(const char* args);
-static void cmd_wifi(const char* args);
 static void cmd_mesh(const char* args);
-static void cmd_elect(const char* args);
+static void cmd_mode(const char* args);
+static void cmd_orch(const char* args);
+static void cmd_peers(const char* args);
+static void cmd_quiet(const char* args);
+static void cmd_reboot(const char* args);
 static void cmd_rtc(const char* args);
 static void cmd_sleep(const char* args);
-static void cmd_peers(const char* args);
-static void cmd_ftm(const char* args);
-static void cmd_sweep(const char* args);
 static void cmd_solve(const char* args);
-static void cmd_broadcast(const char* args);
-static void cmd_quiet(const char* args);
-static void cmd_tone(const char* args);
-static void cmd_config(const char* args);
-static void cmd_mode(const char* args);
 static void cmd_status(const char* args);
-static void cmd_orch(const char* args);
+static void cmd_sweep(const char* args);
 static void cmd_temp(const char* args);
-static void cmd_reboot(const char* args);
+static void cmd_tone(const char* args);
+static void cmd_wifi(const char* args);
 
 // --- Command table ---
 struct CliCommand {
@@ -59,27 +60,27 @@ struct CliCommand {
 };
 
 static const CliCommand s_commands[] = {
+    { "battery",   cmd_battery,   "Read battery voltage and status" },
+    { "broadcast", cmd_broadcast, "Broadcast positions to all nodes" },
+    { "config",    cmd_config,    "NVS config: list|get|set" },
+    { "elect",     cmd_elect,     "Waive gateway role (ESP-MESH re-elects)" },
+    { "ftm",       cmd_ftm,       "FTM single-shot to first peer" },
     { "help",      cmd_help,      "List all commands" },
     { "led",       cmd_led,       "Blink status LED + RGB R/G/B test" },
-    { "battery",   cmd_battery,   "Read battery voltage and status" },
-    { "wifi",      cmd_wifi,      "WiFi: scan|set|clear|status|creds|delegate" },
     { "mesh",      cmd_mesh,      "Join mesh, show peers, then stop" },
-    { "elect",     cmd_elect,     "Waive gateway role (ESP-MESH re-elects)" },
+    { "mode",      cmd_mode,      "Step down from gateway: 'mode peer'" },
+    { "orch",      cmd_orch,      "Orchestrator: travel|random|seq|sched|stop|status" },
+    { "peers",     cmd_peers,     "Show PeerTable (synced from gateway)" },
+    { "quiet",     cmd_quiet,     "Toggle background output suppression" },
+    { "reboot",    cmd_reboot,    "Reboot (esp_restart)" },
     { "rtc",       cmd_rtc,       "RTC memory write/readback test" },
     { "sleep",     cmd_sleep,     "Light sleep [seconds] (default 5)" },
-    { "peers",     cmd_peers,     "Show PeerTable (synced from gateway)" },
-    { "tone",      cmd_tone,      "Interactive tone player (numpad)" },
-    { "config",    cmd_config,    "Get/set NVS config locally or on peers" },
-    { "mode",      cmd_mode,      "Step down from gateway: 'mode peer'" },
-    { "ftm",       cmd_ftm,       "FTM single-shot to first peer" },
-    { "sweep",     cmd_sweep,     "FTM full sweep, print distance matrix" },
     { "solve",     cmd_solve,     "Run MDS position solver" },
-    { "broadcast", cmd_broadcast, "Broadcast positions to all nodes" },
-    { "quiet",     cmd_quiet,     "Toggle background output suppression" },
     { "status",    cmd_status,    "Print mesh state, role, battery, peers" },
-    { "orch",      cmd_orch,      "Orchestrator: travel|random|seq|sched|stop|status" },
+    { "sweep",     cmd_sweep,     "FTM full sweep, print distance matrix" },
     { "temp",      cmd_temp,      "Read internal temperature sensor" },
-    { "reboot",    cmd_reboot,    "Reboot (esp_restart)" },
+    { "tone",      cmd_tone,      "Interactive tone player (numpad)" },
+    { "wifi",      cmd_wifi,      "WiFi: scan|set|clear|status|creds|delegate" },
 };
 static constexpr int CMD_COUNT = sizeof(s_commands) / sizeof(s_commands[0]);
 
@@ -630,7 +631,7 @@ static void cmd_config(const char* args) {
 
     if (strcasecmp(subcmd, "set") == 0) {
         if (!rest || !*rest) {
-            Serial.println("Usage: config set <slot|*|local> key=val [key=val...]");
+            Serial.println("Usage: config set [slot|*] key=val [key=val...]");
             return;
         }
         // Extract target
@@ -644,24 +645,32 @@ static void cmd_config(const char* args) {
             }
         }
 
+        // If the first token contains '=', it's a key=val pair — default to local
+        if (strchr(target, '=')) {
+            // Rejoin target and pairs (undo the split)
+            if (pairs) *(pairs - 1) = ' ';
+            configSetLocal(target);
+            return;
+        }
+
         if (strcasecmp(target, "local") == 0) {
             if (pairs && *pairs) {
                 configSetLocal(pairs);
             } else {
-                Serial.println("Usage: config set local key=val [key=val...]");
+                Serial.println("Usage: config set [slot|*] key=val [key=val...]");
             }
             return;
         }
 
         if (!pairs || !*pairs) {
-            Serial.println("Usage: config set <slot|*> key=val [key=val...]");
+            Serial.println("Usage: config set [slot|*] key=val [key=val...]");
             return;
         }
         configRemoteGetSet(true, target, pairs);
         return;
     }
 
-    Serial.println("Usage: config [list|get <slot|*> [fields...]|set <slot|*|local> key=val...]");
+    Serial.println("Usage: config [list|get <slot|*> [fields...]|set [slot|*] key=val...]");
 }
 
 static void cmd_mode(const char* args) {
@@ -702,7 +711,12 @@ static void cmd_ftm(const char* args) {
                 peer->softap_mac[0], peer->softap_mac[1], peer->softap_mac[2],
                 peer->softap_mac[3], peer->softap_mac[4], peer->softap_mac[5]);
 
-            float dist = FtmManager::initiateSession(peer->softap_mac, MESH_CHANNEL, (uint8_t)(uint32_t)NvsConfigManager::ftmSamplesPerPair);
+            // Query actual operating channel (mesh may have migrated from MESH_CHANNEL)
+            uint8_t ftm_ch = MESH_CHANNEL;
+            wifi_second_chan_t sec;
+            if (esp_wifi_get_channel(&ftm_ch, &sec) != ESP_OK || ftm_ch == 0) ftm_ch = MESH_CHANNEL;
+
+            float dist = FtmManager::initiateSession(peer->softap_mac, ftm_ch, (uint8_t)(uint32_t)NvsConfigManager::ftmSamplesPerPair);
             if (dist >= 0) {
                 Serial.printf("SUCCESS: distance = %.1f cm (%.2f m)\n", dist, dist / 100.0f);
             } else {

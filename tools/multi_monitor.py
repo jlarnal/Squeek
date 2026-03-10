@@ -574,7 +574,7 @@ def single_port_monitor(
         line_buf = b""
         while not stop.is_set():
             try:
-                data = ser.read(1024)
+                data = ser.read(ser.in_waiting or 1)
             except (serial.SerialException, OSError):
                 try:
                     ser.close()

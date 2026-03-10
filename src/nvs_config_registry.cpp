@@ -15,11 +15,9 @@ static const ConfigField s_fields[] = {
     { NVS_KEY_HB_STALE,  "Heartbeat stale multiplier",  CFG_U32   },
     { NVS_KEY_REEL_CD,   "Battery rotation cooldown (s)",  CFG_U32 },
     { NVS_KEY_BAT_HYST,  "Battery hysteresis (mV)",       CFG_U32 },
-    { NVS_KEY_FTM_STALE, "FTM staleness (s)",           CFG_U32   },
     { NVS_KEY_FTM_ANCH,  "FTM new-node anchors",        CFG_U32   },
     { NVS_KEY_FTM_SAMP,  "FTM samples per pair",        CFG_U32   },
     { NVS_KEY_FTM_TMO,   "FTM pair timeout (ms)",       CFG_U32   },
-    { NVS_KEY_FTM_SWP,   "FTM sweep interval (s)",      CFG_U32   },
     { NVS_KEY_FTM_KPN,   "FTM Kalman process noise",    CFG_FLOAT },
     { NVS_KEY_FTM_OFS,   "FTM responder offset (cm)",   CFG_U32   },
     { NVS_KEY_ORCH_MODE, "Orchestrator mode",            CFG_U32   },
@@ -45,11 +43,9 @@ static void getField(JsonDocument& doc, const ConfigField& f) {
     if (strcmp(f.key, NVS_KEY_HB_STALE) == 0)   { doc[f.key] = (uint32_t)NvsConfigManager::heartbeatStaleMultiplier; return; }
     if (strcmp(f.key, NVS_KEY_REEL_CD) == 0)    { doc[f.key] = (uint32_t)(uint16_t)NvsConfigManager::reelectionCooldown_s; return; }
     if (strcmp(f.key, NVS_KEY_BAT_HYST) == 0)   { doc[f.key] = (uint32_t)(uint16_t)NvsConfigManager::batteryHysteresis_mv; return; }
-    if (strcmp(f.key, NVS_KEY_FTM_STALE) == 0)  { doc[f.key] = (uint32_t)NvsConfigManager::ftmStaleness_s; return; }
     if (strcmp(f.key, NVS_KEY_FTM_ANCH) == 0)   { doc[f.key] = (uint32_t)NvsConfigManager::ftmNewNodeAnchors; return; }
     if (strcmp(f.key, NVS_KEY_FTM_SAMP) == 0)   { doc[f.key] = (uint32_t)NvsConfigManager::ftmSamplesPerPair; return; }
     if (strcmp(f.key, NVS_KEY_FTM_TMO) == 0)    { doc[f.key] = (uint32_t)NvsConfigManager::ftmPairTimeout_ms; return; }
-    if (strcmp(f.key, NVS_KEY_FTM_SWP) == 0)    { doc[f.key] = (uint32_t)NvsConfigManager::ftmSweepInterval_s; return; }
     if (strcmp(f.key, NVS_KEY_FTM_KPN) == 0)    { doc[f.key] = (float)NvsConfigManager::ftmKalmanProcessNoise; return; }
     if (strcmp(f.key, NVS_KEY_FTM_OFS) == 0)    { doc[f.key] = (uint32_t)NvsConfigManager::ftmResponderOffset_cm; return; }
     if (strcmp(f.key, NVS_KEY_ORCH_MODE) == 0) { doc[f.key] = (uint32_t)NvsConfigManager::orchMode; return; }
@@ -85,11 +81,9 @@ static bool setField(const char* key, JsonVariantConst val) {
         NvsConfigManager::batteryHysteresis_mv = v;
         return true;
     }
-    if (strcmp(key, NVS_KEY_FTM_STALE) == 0)  { NvsConfigManager::ftmStaleness_s = val.as<uint32_t>(); return true; }
     if (strcmp(key, NVS_KEY_FTM_ANCH) == 0)   { NvsConfigManager::ftmNewNodeAnchors = val.as<uint32_t>(); return true; }
     if (strcmp(key, NVS_KEY_FTM_SAMP) == 0)   { NvsConfigManager::ftmSamplesPerPair = val.as<uint32_t>(); return true; }
     if (strcmp(key, NVS_KEY_FTM_TMO) == 0)    { NvsConfigManager::ftmPairTimeout_ms = val.as<uint32_t>(); return true; }
-    if (strcmp(key, NVS_KEY_FTM_SWP) == 0)    { NvsConfigManager::ftmSweepInterval_s = val.as<uint32_t>(); return true; }
     if (strcmp(key, NVS_KEY_FTM_KPN) == 0)    { NvsConfigManager::ftmKalmanProcessNoise = val.as<float>(); return true; }
     if (strcmp(key, NVS_KEY_FTM_OFS) == 0)    { NvsConfigManager::ftmResponderOffset_cm = val.as<uint32_t>(); return true; }
     if (strcmp(key, NVS_KEY_ORCH_MODE) == 0) { NvsConfigManager::orchMode = val.as<uint32_t>(); return true; }

@@ -28,11 +28,9 @@ PropertyValue<NVS_KEY_REEL_CD,  uint16_t, NvsConfigManager> NvsConfigManager::re
 PropertyValue<NVS_KEY_BAT_HYST, uint16_t, NvsConfigManager> NvsConfigManager::batteryHysteresis_mv(DEFAULT_BATTERY_HYST_MV);
 
 // Phase 2: FTM
-PropertyValue<NVS_KEY_FTM_STALE, uint32_t, NvsConfigManager> NvsConfigManager::ftmStaleness_s(DEFAULT_FTM_STALE_S);
 PropertyValue<NVS_KEY_FTM_ANCH,  uint32_t, NvsConfigManager> NvsConfigManager::ftmNewNodeAnchors(DEFAULT_FTM_NEW_ANCHORS);
 PropertyValue<NVS_KEY_FTM_SAMP,  uint32_t, NvsConfigManager> NvsConfigManager::ftmSamplesPerPair(DEFAULT_FTM_SAMPLES);
 PropertyValue<NVS_KEY_FTM_TMO,   uint32_t, NvsConfigManager> NvsConfigManager::ftmPairTimeout_ms(DEFAULT_FTM_PAIR_TMO_MS);
-PropertyValue<NVS_KEY_FTM_SWP,   uint32_t, NvsConfigManager> NvsConfigManager::ftmSweepInterval_s(DEFAULT_FTM_SWEEP_INT_S);
 PropertyValue<NVS_KEY_FTM_KPN,   float,    NvsConfigManager> NvsConfigManager::ftmKalmanProcessNoise(DEFAULT_FTM_KALMAN_PN);
 PropertyValue<NVS_KEY_FTM_OFS,   uint32_t, NvsConfigManager> NvsConfigManager::ftmResponderOffset_cm(DEFAULT_FTM_RESP_OFS_CM);
 
@@ -163,11 +161,9 @@ void NvsConfigManager::reloadFromNvs()
     heartbeatStaleMultiplier.loadInitial(nvsGetU32(NVS_KEY_HB_STALE, DEFAULT_HB_STALE_MULT));
     reelectionCooldown_s.loadInitial(nvsGetU16(NVS_KEY_REEL_CD, DEFAULT_REELECT_COOLDOWN_S));
     batteryHysteresis_mv.loadInitial(nvsGetU16(NVS_KEY_BAT_HYST, DEFAULT_BATTERY_HYST_MV));
-    ftmStaleness_s.loadInitial(nvsGetU32(NVS_KEY_FTM_STALE, DEFAULT_FTM_STALE_S));
     ftmNewNodeAnchors.loadInitial(nvsGetU32(NVS_KEY_FTM_ANCH, DEFAULT_FTM_NEW_ANCHORS));
     ftmSamplesPerPair.loadInitial(nvsGetU32(NVS_KEY_FTM_SAMP, DEFAULT_FTM_SAMPLES));
     ftmPairTimeout_ms.loadInitial(nvsGetU32(NVS_KEY_FTM_TMO, DEFAULT_FTM_PAIR_TMO_MS));
-    ftmSweepInterval_s.loadInitial(nvsGetU32(NVS_KEY_FTM_SWP, DEFAULT_FTM_SWEEP_INT_S));
     ftmKalmanProcessNoise.loadInitial(nvsGetFloat(NVS_KEY_FTM_KPN, DEFAULT_FTM_KALMAN_PN));
     ftmResponderOffset_cm.loadInitial(nvsGetU32(NVS_KEY_FTM_OFS, DEFAULT_FTM_RESP_OFS_CM));
 
@@ -209,11 +205,9 @@ bool NvsConfigManager::restoreFactoryDefault(uint32_t safeKey)
     heartbeatStaleMultiplier  = (uint32_t)DEFAULT_HB_STALE_MULT;
     reelectionCooldown_s      = DEFAULT_REELECT_COOLDOWN_S;
     batteryHysteresis_mv      = DEFAULT_BATTERY_HYST_MV;
-    ftmStaleness_s            = (uint32_t)DEFAULT_FTM_STALE_S;
     ftmNewNodeAnchors         = (uint32_t)DEFAULT_FTM_NEW_ANCHORS;
     ftmSamplesPerPair         = (uint32_t)DEFAULT_FTM_SAMPLES;
     ftmPairTimeout_ms         = (uint32_t)DEFAULT_FTM_PAIR_TMO_MS;
-    ftmSweepInterval_s        = (uint32_t)DEFAULT_FTM_SWEEP_INT_S;
     ftmKalmanProcessNoise     = DEFAULT_FTM_KALMAN_PN;
     ftmResponderOffset_cm     = (uint32_t)DEFAULT_FTM_RESP_OFS_CM;
 

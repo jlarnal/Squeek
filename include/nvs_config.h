@@ -28,11 +28,9 @@ inline constexpr char NVS_KEY_ORCH_TONE[]  = "orchTone";
 inline constexpr char NVS_KEY_CSYNC_INT[]  = "csyncInt";
 
 // Phase 2: FTM
-inline constexpr char NVS_KEY_FTM_STALE[] = "ftmStale";
 inline constexpr char NVS_KEY_FTM_ANCH[]  = "ftmAnch";
 inline constexpr char NVS_KEY_FTM_SAMP[]  = "ftmSamp";
 inline constexpr char NVS_KEY_FTM_TMO[]   = "ftmTmo";
-inline constexpr char NVS_KEY_FTM_SWP[]   = "ftmSwp";
 inline constexpr char NVS_KEY_FTM_KPN[]   = "ftmKpn";
 inline constexpr char NVS_KEY_FTM_OFS[]   = "ftmOfs";
 
@@ -78,11 +76,9 @@ inline constexpr uint16_t DEFAULT_FAST_SCAN           = NVS_DEFAULT_FAST_SCAN;
 inline constexpr uint16_t DEFAULT_DELEGATE_TMO          = NVS_DEFAULT_DELEGATE_TMO;
 
 // Phase 2: FTM defaults
-inline constexpr uint32_t DEFAULT_FTM_STALE_S        = NVS_DEFAULT_FTM_STALE_S;
 inline constexpr uint8_t  DEFAULT_FTM_NEW_ANCHORS    = NVS_DEFAULT_FTM_NEW_ANCHORS;
 inline constexpr uint8_t  DEFAULT_FTM_SAMPLES        = NVS_DEFAULT_FTM_SAMPLES;
 inline constexpr uint32_t DEFAULT_FTM_PAIR_TMO_MS    = NVS_DEFAULT_FTM_PAIR_TMO_MS;
-inline constexpr uint32_t DEFAULT_FTM_SWEEP_INT_S    = NVS_DEFAULT_FTM_SWEEP_INT_S;
 inline constexpr float    DEFAULT_FTM_KALMAN_PN      = NVS_DEFAULT_FTM_KALMAN_PN;
 inline constexpr int16_t  DEFAULT_FTM_RESP_OFS_CM    = NVS_DEFAULT_FTM_RESP_OFS_CM;
 
@@ -133,11 +129,9 @@ namespace nvs_detail {
         h = fnvByte(h, DEFAULT_HB_STALE_MULT);
         h = fnvU32(h, (uint32_t)DEFAULT_REELECT_COOLDOWN_S);
         h = fnvU32(h, (uint32_t)DEFAULT_BATTERY_HYST_MV);
-        h = fnvU32(h, DEFAULT_FTM_STALE_S);
         h = fnvByte(h, DEFAULT_FTM_NEW_ANCHORS);
         h = fnvByte(h, DEFAULT_FTM_SAMPLES);
         h = fnvU32(h, DEFAULT_FTM_PAIR_TMO_MS);
-        h = fnvU32(h, DEFAULT_FTM_SWEEP_INT_S);
         h = fnvFloat(h, DEFAULT_FTM_KALMAN_PN);
         h = fnvU32(h, (uint32_t)(uint16_t)DEFAULT_FTM_RESP_OFS_CM);
         // Phase 4
@@ -194,11 +188,9 @@ public:
     static PropertyValue<NVS_KEY_BAT_HYST, uint16_t, NvsConfigManager> batteryHysteresis_mv;
 
     // Phase 2: FTM
-    static PropertyValue<NVS_KEY_FTM_STALE, uint32_t, NvsConfigManager> ftmStaleness_s;
     static PropertyValue<NVS_KEY_FTM_ANCH,  uint32_t, NvsConfigManager> ftmNewNodeAnchors;
     static PropertyValue<NVS_KEY_FTM_SAMP,  uint32_t, NvsConfigManager> ftmSamplesPerPair;
     static PropertyValue<NVS_KEY_FTM_TMO,   uint32_t, NvsConfigManager> ftmPairTimeout_ms;
-    static PropertyValue<NVS_KEY_FTM_SWP,   uint32_t, NvsConfigManager> ftmSweepInterval_s;
     static PropertyValue<NVS_KEY_FTM_KPN,   float,    NvsConfigManager> ftmKalmanProcessNoise;
     static PropertyValue<NVS_KEY_FTM_OFS,   uint32_t, NvsConfigManager> ftmResponderOffset_cm;
 

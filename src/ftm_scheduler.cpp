@@ -29,11 +29,7 @@ static bool           s_readyB = false;
 static uint32_t       s_pairStartMs = 0;
 
 static TimerHandle_t  s_processTimer = nullptr;
-static TimerHandle_t  s_sweepTimer   = nullptr;
 static bool           s_active       = false;
-
-// Edge staleness tracking: timestamp of last measurement per pair
-static uint32_t       s_lastMeasured[MESH_MAX_NODES][MESH_MAX_NODES];
 
 // --- Queue helpers ---
 
@@ -218,31 +214,6 @@ static void startNextPair() {
     }
 }
 
-static void sweepTimerCb(TimerHandle_t t) {
-    (void)t;
-
-    // Check for stale edges and re-queue them
-    uint32_t stale_s = (uint32_t)NvsConfigManager::ftmStaleness_s;
-    uint32_t now = millis();
-    uint8_t count = PeerTable::peerCount();
-
-    for (uint8_t i = 0; i < count; i++) {
-        for (uint8_t j = i + 1; j < count; j++) {
-            uint32_t age_ms = now - s_lastMeasured[i][j];
-            if (age_ms > stale_s * 1000) {
-                FtmScheduler::enqueuePair(i, j, FTM_PRIO_STALE);
-            }
-        }
-    }
-
-    // Also do full sweep if configured
-    uint32_t sweep_s = (uint32_t)NvsConfigManager::ftmSweepInterval_s;
-    if (sweep_s > 0) {
-        // Full sweep is already handled by stale edge detection
-        // Only force if all edges somehow stayed fresh
-    }
-}
-
 // --- Public API ---
 
 void FtmScheduler::init() {
@@ -251,7 +222,6 @@ void FtmScheduler::init() {
     s_queueCount = 0;
     s_pairState = FTM_PAIR_IDLE;
     s_active = false;
-    memset(s_lastMeasured, 0, sizeof(s_lastMeasured));
 
     // Process timer: checks pair state machine every 500ms
     if (s_processTimer == nullptr) {
@@ -260,22 +230,11 @@ void FtmScheduler::init() {
     }
     xTimerStart(s_processTimer, 0);
 
-    // Sweep timer: checks staleness every ftmSweepInterval_s
-    uint32_t sweep_s = (uint32_t)NvsConfigManager::ftmSweepInterval_s;
-    if (sweep_s > 0) {
-        if (s_sweepTimer == nullptr) {
-            s_sweepTimer = xTimerCreate("ftmSwp", pdMS_TO_TICKS(sweep_s * 1000),
-                                         pdTRUE, nullptr, sweepTimerCb);
-        }
-        xTimerStart(s_sweepTimer, 0);
-    }
-
     SqLog.println("[ftmsched] Initialized");
 }
 
 void FtmScheduler::shutdown() {
     if (s_processTimer) xTimerStop(s_processTimer, 0);
-    if (s_sweepTimer) xTimerStop(s_sweepTimer, 0);
     s_active = false;
     s_queueCount = 0;
     s_pairState = FTM_PAIR_IDLE;
@@ -284,6 +243,11 @@ void FtmScheduler::shutdown() {
 
 void FtmScheduler::enqueuePair(uint8_t nodeA_idx, uint8_t nodeB_idx, FtmPriority prio) {
     if (nodeA_idx == nodeB_idx) return;
+
+    // Responder (B) must have an active SoftAP — leaf nodes don't
+    PeerEntry* responder = PeerTable::getEntryByIndex(nodeB_idx);
+    if (responder && (responder->flags & PEER_STATUS_LEAF)) return;
+
     if (isDuplicatePair(nodeA_idx, nodeB_idx)) return;
 
     FtmQueueItem item;
@@ -302,8 +266,27 @@ void FtmScheduler::enqueueFullSweep() {
     SqLog.printf("[ftmsched] Full sweep: %u nodes, %u pairs\n",
         count, (count * (count - 1)) / 2);
 
+    // Fan-out order: keep the same responder (AP) for each round to
+    // minimise role switches.  Leaf nodes have no active SoftAP so they
+    // can only be initiators (A), never responders (B).
+    //
+    // Pass 1 — non-leaf responders: standard fan-out
+    for (uint8_t j = count - 1; j >= 1; j--) {
+        PeerEntry* resp = PeerTable::getEntryByIndex(j);
+        if (!resp || (resp->flags & PEER_STATUS_LEAF)) continue;
+        for (uint8_t i = 0; i < j; i++) {
+            enqueuePair(i, j, FTM_PRIO_SWEEP);
+        }
+    }
+    // Pass 2 — leaf-to-nonleaf pairs that pass 1 missed (leaf index > nonleaf index)
     for (uint8_t i = 0; i < count; i++) {
-        for (uint8_t j = i + 1; j < count; j++) {
+        PeerEntry* leaf = PeerTable::getEntryByIndex(i);
+        if (!leaf || !(leaf->flags & PEER_STATUS_LEAF)) continue;
+        for (uint8_t j = 0; j < count; j++) {
+            if (j == i) continue;
+            PeerEntry* resp = PeerTable::getEntryByIndex(j);
+            if (!resp || (resp->flags & PEER_STATUS_LEAF)) continue;
+            // enqueuePair deduplicates, so pairs already covered by pass 1 are skipped
             enqueuePair(i, j, FTM_PRIO_SWEEP);
         }
     }
@@ -314,11 +297,23 @@ void FtmScheduler::enqueueNewNode(uint8_t node_idx) {
     uint8_t count = PeerTable::peerCount();
     uint8_t queued = 0;
 
+    PeerEntry* newNode = PeerTable::getEntryByIndex(node_idx);
+    bool newIsLeaf = newNode && (newNode->flags & PEER_STATUS_LEAF);
+
     for (uint8_t i = 0; i < count && queued < anchors; i++) {
         if (i == node_idx) continue;
         PeerEntry* e = PeerTable::getEntryByIndex(i);
         if (!e || (e->flags & PEER_STATUS_DEAD)) continue;
-        enqueuePair(node_idx, i, FTM_PRIO_NEW_NODE);
+
+        bool anchorIsLeaf = (e->flags & PEER_STATUS_LEAF);
+        if (anchorIsLeaf && newIsLeaf) continue;  // no usable responder
+
+        // Put the non-leaf node in responder (B) position
+        if (anchorIsLeaf) {
+            enqueuePair(i, node_idx, FTM_PRIO_NEW_NODE);
+        } else {
+            enqueuePair(node_idx, i, FTM_PRIO_NEW_NODE);
+        }
         queued++;
     }
 
@@ -362,9 +357,6 @@ void FtmScheduler::onFtmResult(const uint8_t* initiator, const uint8_t* responde
     if (status == 0 && distance_cm >= 0) {
         // Store distance in peer table
         PeerTable::setDistance(s_currentA, s_currentB, distance_cm);
-        s_lastMeasured[s_currentA][s_currentB] = millis();
-        s_lastMeasured[s_currentB][s_currentA] = millis();
-
         SqLog.printf("[ftmsched] Pair (%u,%u) distance=%.1f cm\n",
             s_currentA, s_currentB, distance_cm);
     } else {

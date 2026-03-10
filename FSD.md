@@ -473,11 +473,9 @@ All major subsystem classes use the **static class** pattern: deleted constructo
 | `heartbeatStaleMultiplier` | `uint32_t` | `"hbStale"` | `3` | 2 | Missed heartbeats before peer marked stale |
 | `reelectionCooldown_s` | `uint16_t` | `"reelCd"` | `60` | 2 | Minimum seconds between step-down attempts |
 | `batteryHysteresis_mv` | `uint16_t` | `"batHyst"` | `300` | 2 | Battery recovery hysteresis above `BATTERY_LOW_MV` before clearing waived flag |
-| `ftmStaleness_s` | `uint32_t` | `"ftmStale"` | `300` | 2 | FTM data staleness threshold (seconds) |
 | `ftmNewNodeAnchors` | `uint32_t` | `"ftmAnch"` | `5` | 2 | Anchor FTM rounds for new nodes |
 | `ftmSamplesPerPair` | `uint32_t` | `"ftmSamp"` | `8` | 2 | FTM samples per pair |
 | `ftmPairTimeout_ms` | `uint32_t` | `"ftmTmo"` | `3000` | 2 | FTM pair timeout (ms) |
-| `ftmSweepInterval_s` | `uint32_t` | `"ftmSwp"` | `600` | 2 | FTM full sweep interval (seconds) |
 | `ftmKalmanProcessNoise` | `float` | `"ftmKpn"` | `0.01` | 2 | Kalman filter process noise for FTM |
 | `ftmResponderOffset_cm` | `uint32_t` | `"ftmOfs"` | `0` | 2 | FTM responder offset calibration (cm) |
 | `orchMode` | `uint32_t` | `"orchMode"` | `0` | 4 | Orchestrator play mode (0=off) |

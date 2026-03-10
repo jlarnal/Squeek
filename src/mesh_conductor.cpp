@@ -642,6 +642,9 @@ static void meshEventHandler(void* arg, esp_event_base_t event_base,
             esp_read_mac(hb.mac, ESP_MAC_WIFI_STA);
             hb.battery_mv = (uint16_t)PowerManager::batteryMv();
             hb.flags = 0;
+            if (esp_mesh_get_type() == MESH_LEAF) {
+                hb.flags |= PEER_STATUS_LEAF;
+            }
             esp_read_mac(hb.softap_mac, ESP_MAC_WIFI_SOFTAP);
             // Use logical gateway MAC if known, else fall back to ESP-IDF root
             static const uint8_t zero[6] = {0};

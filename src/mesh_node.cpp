@@ -29,6 +29,9 @@ static void heartbeatTimerCb(TimerHandle_t t) {
     if (RtcState::isValid() && RtcState::get()->waived_low_battery) {
         hb.flags |= PEER_STATUS_WAIVED;
     }
+    if (esp_mesh_get_type() == MESH_LEAF) {
+        hb.flags |= PEER_STATUS_LEAF;
+    }
     esp_read_mac(hb.softap_mac, ESP_MAC_WIFI_SOFTAP);
 
     // Route heartbeat to logical gateway (may differ from ESP-IDF root after role transfer)
