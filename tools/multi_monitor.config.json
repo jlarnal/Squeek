@@ -1,0 +1,4 @@
+{
+  "_reconnect_interval_ms_help": "How often to poll for a disconnected COM port, in milliseconds (default 2000)",
+  "reconnect_interval_ms": 2000
+}
