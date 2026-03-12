@@ -311,11 +311,16 @@ LOW_BATTERY → DEEP_SLEEP (timer-only wake for periodic check)
 - [x] Delegate ticket — gateway tracks delegate MAC + monotonic `remaining_s` countdown (never rolls back, floors at zero)
 - [x] Step-down suppression while delegate ticket is active; ticket transfer via `MSG_TYPE_DELEGATE_TICKET` / `MSG_TYPE_DELEGATE_TICKET_ACK` on gateway handoff
 - [x] MAC-jittered backoff on gateway loss (5–15s), delegate reboot race fix
-- [x] `cfg.channel = 1` for routerless bootstrap (fixed channel so all nodes converge); `cfg.channel = 0` on delegate return (scan all channels for existing mesh)
+- [x] `cfg.channel = 1` for routerless bootstrap (fixed channel so all credless nodes converge); `cfg.channel = 0` for credentialed nodes and delegate return (scan all channels)
 - [x] Fast-path boot from RTC state (GATEWAY/PEER/DELEGATE roles)
 - [x] `MSG_TYPE_SETUP_DELEGATE` / `MSG_TYPE_DELEGATE_RESULT` / `MSG_TYPE_MERGE_CHECK`
 - [x] WiFi scan filters out other `Squeek_Config_*` SSIDs
 - [x] LED blinks 4x faster when a client connects to the delegate SoftAP
+- [x] `CredentialTable` — 8-slot multi-credential NVS storage (`c0s`..`c7s`/`c0p`..`c7p`), scan matching, mesh serialization. Legacy `wifiSsid`/`wifiPass` migrated to slot 0 on first boot
+- [x] Credential exchange protocol: `MSG_TYPE_CRED_OFFER` (gateway → peer on join) + `MSG_TYPE_CRED_REPLY` (peer → gateway with merged creds + tenure score)
+- [x] RSSI-aware tenure score — RAM-only computed fitness: `128 + RSSI_component(0..80) + battery(0..100) + uptime(0..50)`. Replaces blind NVS-persisted `s_gwTenure` counter
+- [x] HeartbeatMsg extended with `router_rssi` (int8_t) + `tenure_score` (uint16_t) for periodic re-evaluation
+- [x] Periodic gateway re-evaluation every `N*(1+k)` heartbeat ticks (`rssiDk` NVS param, Q4.4 fixed-point, default 0.5); gateway waives root if peer tenure exceeds its own
 
 **Phase 5C — Dashboard (not started):**
 - REST API: node list, position map, sound library, trigger play, upload samples
@@ -487,6 +492,7 @@ All major subsystem classes use the **static class** pattern: deleted constructo
 | `webEnabled` | `bool` | `"webEn"` | `true` | 5 | Web server enable/disable |
 | `fastScanDelay_s` | `uint16_t` | `"fastScn"` | `5` | 5 | Fast-boot scan delay before self-promotion (seconds) |
 | `delegateTimeout_s` | `uint16_t` | `"dlgTmo"` | `240` | 5 | Delegate watchdog timeout (seconds, clamped 60–600) |
+| `rssiDecayK` | `uint16_t` | `"rssiDk"` | `0x08` (0.5) | 5B | RSSI re-evaluation decay coefficient (Q4.4 fixed-point); gateway compares tenure scores every `N*(1+k/16)` heartbeat ticks |
 | ~~`scanContestTimeout_s`~~ | — | — | — | — | *Removed — scan contest timeout hardcoded to 10s in `mesh_gateway.cpp`* |
 
 **Supported `PropertyValue` types:** `bool`, `uint16_t`, `uint32_t`, `uint64_t`, `float` (stored as bit-cast `uint32_t` in NVS).
@@ -501,6 +507,25 @@ The Squeek Gateway role is assigned by observing ESP-MESH root status — whiche
 - On gateway loss, ESP-MESH's internal root recovery promotes a new root; that node becomes Gateway.
 - `fix_root(false)` (default) — ESP-MESH handles root election and dual-root resolution natively using RSSI-based voting. Root changes are triggered voluntarily via `esp_mesh_waive_root()`.
 
+**Tenure score (RAM-only, computed — never persisted to NVS):**
+
+The tenure score replaces the old monotonic `s_gwTenure` NVS counter. It is recomputed from live data and reflects a node's current fitness to be gateway:
+
+```
+tenure = 128
+    + (LOWEST_TOLERATED_RSSI + best_rssi_dBm)        // 0..80  (RSSI to best known router)
+    + map(battery_mV, BATTERY_LOW_MV, 4200, 0, 100)  // 0..100 (battery health)
+    + map((uptime_ms >> 16), 0, 65535, 0, 50)         // 0..50  (stability bonus)
+```
+
+- `best_rssi_dBm`: best RSSI of any detected router for which valid credentials exist (from `CredentialTable::matchScan()`). If no known router is detected, this component is 0 (score = 128 + battery + uptime).
+- Score is self-correcting: bad RSSI → low score, reboot → uptime resets, low battery → low score.
+- Implemented in `computeTenureScore()` (`mesh_conductor.cpp`), declared in `mesh_conductor.h`.
+
+**Tenure-based re-evaluation:**
+- On peer join: gateway sends `MSG_TYPE_CRED_OFFER`, peer replies with `MSG_TYPE_CRED_REPLY` containing its tenure score. If peer's tenure > gateway's → `esp_mesh_waive_root()`.
+- Periodic: peers include `router_rssi` and `tenure_score` in `HeartbeatMsg`. Gateway tracks the best peer tenure across heartbeats and re-evaluates every `N*(1+k/16)` ticks (N = alive peers, k = `rssiDecayK` NVS param, Q4.4 fixed-point). If best peer consistently scores higher → `esp_mesh_waive_root()`.
+
 **Battery rotation (absolute threshold + "hot potato" waiving):**
 The gateway monitors its own battery via `PeerTable::checkReelection()`. When gateway battery drops below `BATTERY_LOW_MV` (3300 mV) and at least one alive peer has NOT set the `PEER_STATUS_WAIVED` flag in its heartbeat, the gateway:
 1. Sets `waived_low_battery = 1` in RTC state
@@ -511,7 +536,9 @@ The waived node advertises `PEER_STATUS_WAIVED` in its heartbeat flags, so the n
 
 ### 7.2.1 Mesh Timing Scenarios
 
-Sequence diagrams for the mesh lifecycle. With `fix_root(false)`, ESP-MESH handles root election natively. However, routerless bootstrap requires a safety-net **bootstrap timer**: a MAC-based deterministic delay (5–30s via FNV-1a hash of STA MAC) started at `esp_mesh_start()`. If no parent is found before the timer fires, the node self-elects as root via `esp_mesh_set_type(MESH_ROOT)`. The lowest-MAC node wins the race deterministically. All routerless nodes use fixed channel 1 so they converge on the same frequency.
+Sequence diagrams for the mesh lifecycle. With `fix_root(false)`, ESP-MESH handles root election natively. However, routerless bootstrap requires a safety-net **bootstrap timer**: a MAC-based deterministic delay (5–30s via FNV-1a hash of STA MAC) started at `esp_mesh_start()`. If no parent is found before the timer fires, the node self-elects as root via `esp_mesh_set_type(MESH_ROOT)`. The lowest-MAC node wins the race deterministically.
+
+**Channel strategy:** Credless nodes use `cfg.channel = 1` (fixed) so all routerless nodes converge on the same frequency. Credentialed nodes and delegate returns use `cfg.channel = 0` (scan all) to find the router on any channel. Using `channel = 0` for credless nodes was attempted but fails: ESP-MESH drops to STA-only mode during channel scanning, so no AP beacons are emitted and nodes cannot discover each other before bootstrap timers fire.
 
 Key constants (from `bsp.hpp`): `MESH_REELECT_SLEEP_MS` = 5 s.
 
@@ -662,7 +689,33 @@ If the old gateway crashes before transferring, the delegate eventually times ou
 2. Gateway self-delegates: sets `next_role = DELEGATE` in RTC, reboots
 3. Steps 9–13 above, except the delegate IS the former gateway
 
-> **Lone gateway:** If the gateway has no peers, the BOOT button press triggers self-delegation (sets `next_role = DELEGATE` in RTC and reboots). **Fallback strategy:** If WiFi scanning on mesh nodes proves unreliable (netif conflicts), the scan contest can be replaced by selecting the peer with the strongest RSSI to the root (already known from the mesh layer).
+> **Lone gateway:** If the gateway has no peers, the BOOT button press triggers self-delegation (sets `next_role = DELEGATE` in RTC and reboots).
+
+#### Credential Exchange Protocol
+
+Triggered automatically when a new peer joins the gateway's mesh (`Gateway::onPeerJoined()`). This ensures all nodes share WiFi knowledge and enables RSSI-aware gateway selection.
+
+**Step 1 — `MSG_TYPE_CRED_OFFER` (gateway → peer):**
+Gateway serializes all its `CredentialTable` entries via `toBuffer()` and sends them to the new peer. Format: `| type(1B) | count(1B) | CredWireEntry[] |`. Each entry: `| ssid_len(1B) | ssid(32B) | pass_len(1B) | pass(64B) |`.
+
+**Step 2 — `MSG_TYPE_CRED_REPLY` (peer → gateway):**
+Peer imports the gateway's credentials into its own `CredentialTable` (deduplicates by SSID), runs a WiFi scan to measure RSSI to known routers, computes its tenure score, and replies. Format: `| type(1B) | count(1B) | tenure_score(2B) | toBuffer() payload |`.
+
+**Step 3 — Gateway processes reply:**
+- Imports any unknown credentials from peer into `CredentialTable`.
+- Compares peer's tenure score against its own. If peer's tenure > gateway's tenure → `esp_mesh_waive_root()`.
+
+**Message size budget:** 8 creds × (1+32+1+64) = 784 bytes + headers. Fits in one ESP-MESH frame (MTU = 1472 bytes).
+
+#### CredentialTable
+
+Static class providing multi-credential NVS storage with 8 slots. Files: `credential_table.h` / `credential_table.cpp`.
+
+**NVS keys:** `c0s`/`c0p` through `c7s`/`c7p` (SSID/password per slot).
+
+**Legacy migration:** On first boot, if slot 0 is empty, migrates `wifiSsid`/`wifiPass` keys to slot 0. `SqWebServer::loadWifiCreds()`/`saveWifiCreds()`/`hasWifiCreds()` delegate to `CredentialTable` for backward compatibility.
+
+**API:** `init()`, `add(ssid, pass)`, `get(slot, ...)`, `count()`, `hasAny()`, `matchScan(records, count)` → `{slot, rssi, ssid}`, `toBuffer()`/`fromBuffer()` for mesh serialization.
 
 ### 7.3 LedDriver
 

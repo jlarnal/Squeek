@@ -1,4 +1,5 @@
 #include "mesh_conductor.h"
+#include "credential_table.h"
 #include "peer_table.h"
 #include "ftm_manager.h"
 #include "ftm_scheduler.h"
@@ -33,6 +34,10 @@ static TimerHandle_t s_ticketTimer = nullptr;
 static uint8_t  s_ticketMac[6] = {0};
 static uint16_t s_ticketRemaining = 0;
 
+// RSSI re-evaluation state — gateway tracks best peer tenure from heartbeats
+static uint16_t s_bestPeerTenure  = 0;
+static uint32_t s_hbTickCounter   = 0;   // counts heartbeat timer ticks
+
 static void ticketCountdownCb(TimerHandle_t t) {
     (void)t;
     if (s_ticketRemaining > 0) {
@@ -50,6 +55,7 @@ static void ticketCountdownCb(TimerHandle_t t) {
             memset(rtc->ticket_delegate_mac, 0, 6);
             rtc->ticket_remaining_s = 0;
             RtcState::save();
+            
         }
     }
 }
@@ -57,6 +63,31 @@ static void ticketCountdownCb(TimerHandle_t t) {
 static void gwHeartbeatCb(TimerHandle_t t) {
     (void)t;
     PeerTable::updateSelf((uint16_t)PowerManager::batteryMv());
+
+    // Periodic RSSI re-evaluation: every N*(1+k) heartbeat ticks
+    s_hbTickCounter++;
+    uint8_t alive = PeerTable::alivePeerCount();
+    if (alive == 0) return;  // no peers to compare against
+
+    // k is Q4.4 fixed-point: 0x08 = 0.5, 0x10 = 1.0
+    uint8_t kRaw = (uint8_t)(uint16_t)NvsConfigManager::rssiDecayK;
+    // interval = N * (1 + k/16) = N + N*k/16
+    uint32_t interval = (uint32_t)alive + ((uint32_t)alive * kRaw) / 16;
+    if (interval < 2) interval = 2;  // minimum 2 ticks
+
+    if (s_hbTickCounter >= interval) {
+        s_hbTickCounter = 0;
+
+        // Compare our tenure against best peer tenure seen in recent heartbeats
+        uint16_t myTenure = computeTenureScore(MeshConductor::bestRouterRssi());
+        if (s_bestPeerTenure > myTenure) {
+            SqLog.printf("[gateway] Re-eval: peer tenure %u > mine %u — waiving root\n",
+                         s_bestPeerTenure, myTenure);
+            MeshConductor::requestStepDown();
+        }
+        // Reset for next evaluation window
+        s_bestPeerTenure = 0;
+    }
 }
 
 // Scan contest timeout — pick winner and dispatch delegate
@@ -188,16 +219,17 @@ void Gateway::onPeerJoined(const uint8_t* mac) {
     // Peer will send heartbeat shortly — PeerTable entry created on first heartbeat.
     // If we want immediate FTM, queue the new node once it appears in PeerTable.
 
-    // Push WiFi creds to new peer so it can reconnect independently after reboot
-    if (SqWebServer::hasWifiCreds()) {
-        WifiCredsMsg msg = {};
-        msg.type = MSG_TYPE_WIFI_CREDS;
-        char ssid[33] = {}, pass[65] = {};
-        if (SqWebServer::loadWifiCreds(ssid, sizeof(ssid), pass, sizeof(pass))) {
-            strncpy(msg.ssid, ssid, 32);
-            strncpy(msg.password, pass, 64);
-            MeshConductor::sendToNode(mac, &msg, sizeof(msg));
-            SqLog.printf("[gateway] Pushed WiFi creds to new peer (SSID=%s)\n", ssid);
+    // Credential exchange: send all known creds to the new peer
+    // Heap-allocate — this runs on sys_evt task which has limited stack
+    if (CredentialTable::hasAny()) {
+        uint8_t* offerBuf = (uint8_t*)malloc(1024);
+        if (offerBuf) {
+            offerBuf[0] = MSG_TYPE_CRED_OFFER;
+            uint16_t credLen = CredentialTable::toBuffer(&offerBuf[1], 1024 - 1);
+            MeshConductor::sendToNode(mac, offerBuf, 1 + credLen);
+            SqLog.printf("[gateway] Sent CRED_OFFER to new peer (%u creds)\n",
+                         CredentialTable::count());
+            free(offerBuf);
         }
     }
 
@@ -287,6 +319,12 @@ void Gateway::startDelegation() {
         xTimerChangePeriod(s_scanContestTimer, pdMS_TO_TICKS(10000), 0);
     }
     xTimerStart(s_scanContestTimer, 0);
+}
+
+void Gateway::trackPeerTenure(uint16_t tenure) {
+    if (tenure > s_bestPeerTenure) {
+        s_bestPeerTenure = tenure;
+    }
 }
 
 void Gateway::onScanResult(const uint8_t* mac, uint8_t ssid_count) {

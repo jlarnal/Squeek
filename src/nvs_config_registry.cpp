@@ -27,6 +27,8 @@ static const ConfigField s_fields[] = {
     { NVS_KEY_ORCH_TONE, "Orch tone index",              CFG_U32   },
     { NVS_KEY_CSYNC_INT, "Clock sync interval (s)",      CFG_U32   },
     { NVS_KEY_WEB_EN,   "Web UI enabled",              CFG_BOOL  },
+    { NVS_KEY_RSSI_DK,  "RSSI decay K (Q4.4)",         CFG_U32   },
+    { NVS_KEY_BAT_TEN,  "Battery in tenure score",     CFG_BOOL  },
 };
 static constexpr uint8_t FIELD_COUNT = sizeof(s_fields) / sizeof(s_fields[0]);
 
@@ -55,6 +57,8 @@ static void getField(JsonDocument& doc, const ConfigField& f) {
     if (strcmp(f.key, NVS_KEY_ORCH_TONE) == 0) { doc[f.key] = (uint32_t)NvsConfigManager::orchToneIndex; return; }
     if (strcmp(f.key, NVS_KEY_CSYNC_INT) == 0) { doc[f.key] = (uint32_t)NvsConfigManager::clockSyncInterval_s; return; }
     if (strcmp(f.key, NVS_KEY_WEB_EN) == 0)   { doc[f.key] = (bool)NvsConfigManager::webEnabled; return; }
+    if (strcmp(f.key, NVS_KEY_RSSI_DK) == 0) { doc[f.key] = (uint32_t)(uint16_t)NvsConfigManager::rssiDecayK; return; }
+    if (strcmp(f.key, NVS_KEY_BAT_TEN) == 0) { doc[f.key] = (bool)NvsConfigManager::batteryInTenure; return; }
 }
 
 // --- Setter helper: apply a JSON value to the matching PropertyValue ---
@@ -93,6 +97,8 @@ static bool setField(const char* key, JsonVariantConst val) {
     if (strcmp(key, NVS_KEY_ORCH_TONE) == 0) { NvsConfigManager::orchToneIndex = val.as<uint32_t>(); return true; }
     if (strcmp(key, NVS_KEY_CSYNC_INT) == 0) { NvsConfigManager::clockSyncInterval_s = val.as<uint32_t>(); return true; }
     if (strcmp(key, NVS_KEY_WEB_EN) == 0)   { NvsConfigManager::webEnabled = val.as<bool>(); return true; }
+    if (strcmp(key, NVS_KEY_RSSI_DK) == 0) { NvsConfigManager::rssiDecayK = (uint16_t)val.as<uint32_t>(); return true; }
+    if (strcmp(key, NVS_KEY_BAT_TEN) == 0) { NvsConfigManager::batteryInTenure = val.as<bool>(); return true; }
     return false;
 }
 

@@ -47,13 +47,16 @@ public:
 
 private:
     T _value;
+    const char* _name;
     BeforeChangeFn _beforeChange = nullptr;
 
     // Direct load from NVS at startup (bypasses write-back and callback)
     void loadInitial(const T& value) { _value = value; }
 
 public:
-    PropertyValue(T init) : _value(init) {}
+    PropertyValue(T init, const char* name = nvsKey) : _value(init), _name(name) {}
+
+    const char* name() const { return _name; }
 
     void setBeforeChange(BeforeChangeFn cb) { _beforeChange = cb; }
 

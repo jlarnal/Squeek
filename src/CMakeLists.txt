@@ -10,6 +10,7 @@ idf_component_register(SRCS
     "nvs_config.cpp"
     "nvs_config_registry.cpp"
     "peer_table.cpp"
+    "credential_table.cpp"
     "ftm_manager.cpp"
     "ftm_scheduler.cpp"
     "position_solver.cpp"

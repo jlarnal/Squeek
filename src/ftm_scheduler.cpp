@@ -6,6 +6,7 @@
 #include "nvs_config.h"
 #include "bsp.hpp"
 #include "sq_log.h"
+#include "web_server.h"
 #include <Arduino.h>
 #include <esp_mac.h>
 #include <string.h>
@@ -370,6 +371,8 @@ void FtmScheduler::onFtmResult(const uint8_t* initiator, const uint8_t* responde
 
 void FtmScheduler::triggerSolve() {
     PositionSolver::solve();
+    broadcastPositions();
+    SqWebServer::broadcastPeers();
 }
 
 void FtmScheduler::broadcastPositions() {

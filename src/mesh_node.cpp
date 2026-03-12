@@ -1,4 +1,5 @@
 #include "mesh_conductor.h"
+#include "credential_table.h"
 #include "peer_table.h"
 #include "ftm_manager.h"
 #include "power_manager.h"
@@ -21,7 +22,7 @@ static TimerHandle_t s_earlyHbTimer = nullptr;
 static void heartbeatTimerCb(TimerHandle_t t) {
     (void)t;
 
-    HeartbeatMsg hb;
+    HeartbeatMsg hb = {};
     hb.type = MSG_TYPE_HEARTBEAT;
     esp_read_mac(hb.mac, ESP_MAC_WIFI_STA);
     hb.battery_mv = (uint16_t)PowerManager::batteryMv();
@@ -33,6 +34,8 @@ static void heartbeatTimerCb(TimerHandle_t t) {
         hb.flags |= PEER_STATUS_LEAF;
     }
     esp_read_mac(hb.softap_mac, ESP_MAC_WIFI_SOFTAP);
+    hb.router_rssi  = MeshConductor::bestRouterRssi();
+    hb.tenure_score  = computeTenureScore(hb.router_rssi);
 
     // Route heartbeat to logical gateway (may differ from ESP-IDF root after role transfer)
     const uint8_t* gw = MeshConductor::gatewayMac();

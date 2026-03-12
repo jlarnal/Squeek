@@ -73,13 +73,16 @@ bool StorageManager::serveFile(AsyncWebServerRequest* request, const char* path)
     if (LittleFS.exists(gzPath.c_str())) {
         AsyncWebServerResponse* response = request->beginResponse(LittleFS, gzPath, mime);
         response->addHeader("Content-Encoding", "gzip");
+        response->addHeader("Cache-Control", "no-cache");
         request->send(response);
         return true;
     }
 
     // Fallback to uncompressed
     if (LittleFS.exists(path)) {
-        request->send(LittleFS, path, mime);
+        AsyncWebServerResponse* response = request->beginResponse(LittleFS, path, mime);
+        response->addHeader("Cache-Control", "no-cache");
+        request->send(response);
         return true;
     }
 

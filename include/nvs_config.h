@@ -43,6 +43,12 @@ inline constexpr char NVS_KEY_FAST_SCAN[] = "fastScn";
 // Delegate
 inline constexpr char NVS_KEY_DLG_TMO[] = "dlgTmo";
 
+// RSSI re-evaluation
+inline constexpr char NVS_KEY_RSSI_DK[] = "rssiDk";
+
+// Battery in tenure
+inline constexpr char NVS_KEY_BAT_TEN[] = "batTen";
+
 // --- Default values (sourced from BSP defines for single-point maintenance) ---
 
 inline constexpr bool     DEFAULT_LEDS_ENABLED       = NVS_DEFAULT_LEDS_ENABLED;
@@ -74,6 +80,10 @@ inline constexpr uint16_t DEFAULT_FAST_SCAN           = NVS_DEFAULT_FAST_SCAN;
 
 // Delegate
 inline constexpr uint16_t DEFAULT_DELEGATE_TMO          = NVS_DEFAULT_DELEGATE_TMO;
+
+// RSSI re-evaluation
+inline constexpr uint8_t  DEFAULT_RSSI_DEC_K            = NVS_DEFAULT_RSSI_DEC_K;
+inline constexpr bool     DEFAULT_BAT_TENURE            = NVS_DEFAULT_BAT_TENURE;
 
 // Phase 2: FTM defaults
 inline constexpr uint8_t  DEFAULT_FTM_NEW_ANCHORS    = NVS_DEFAULT_FTM_NEW_ANCHORS;
@@ -147,6 +157,10 @@ namespace nvs_detail {
         h = fnvU32(h, (uint32_t)DEFAULT_FAST_SCAN);
         // Delegate
         h = fnvU32(h, (uint32_t)DEFAULT_DELEGATE_TMO);
+        // RSSI re-evaluation
+        h = fnvByte(h, DEFAULT_RSSI_DEC_K);
+        // Battery in tenure
+        h = fnvBool(h, DEFAULT_BAT_TENURE);
         return h;
     }
 }
@@ -210,6 +224,12 @@ public:
 
     // Delegate timeout
     static PropertyValue<NVS_KEY_DLG_TMO, uint16_t, NvsConfigManager> delegateTimeout_s;
+
+    // RSSI re-evaluation decay coefficient (Q4.4 fixed-point, stored as uint16_t)
+    static PropertyValue<NVS_KEY_RSSI_DK, uint16_t, NvsConfigManager> rssiDecayK;
+
+    // Battery in tenure score (off by default — USB-powered boards read false low)
+    static PropertyValue<NVS_KEY_BAT_TEN, bool, NvsConfigManager> batteryInTenure;
 };
 
 #endif // NVS_CONFIG_H

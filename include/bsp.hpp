@@ -30,6 +30,9 @@ constexpr gpio_num_t PIEZO_PIN_B = GPIO_NUM_23;  // push-pull complement
 #define BATTERY_LOW_MV       3300
 #define BATTERY_CRITICAL_MV  3100
 
+// RSSI floor for tenure scoring (absolute value, so -80 dBm → 80)
+#define LOWEST_TOLERATED_RSSI 80
+
 // Debug menu
 #define DEBUG_MENU_ENABLED
 
@@ -53,7 +56,7 @@ constexpr gpio_num_t PIEZO_PIN_B = GPIO_NUM_23;  // push-pull complement
 
 // NvsConfigManager property defaults (override here to change factory values)
 #define NVS_DEFAULT_LEDS_ENABLED        true
-#define NVS_DEFAULT_CLR_INIT            0x00140600   // orange (20,6,0)
+#define NVS_DEFAULT_CLR_INIT            0x00080506     // dim white (8,5,6)
 #define NVS_DEFAULT_CLR_READY           0x00140F00   // yellow  (20,15,0)
 #define NVS_DEFAULT_CLR_GATEWAY         0x00000008   // dim blue   (0,10,15)
 #define NVS_DEFAULT_CLR_PEER            0x00000800   // dim green      (0,255,0)
@@ -99,6 +102,10 @@ constexpr gpio_num_t PIEZO_PIN_B = GPIO_NUM_23;  // push-pull complement
 
 // Delegate timeout
 #define NVS_DEFAULT_DELEGATE_TMO   240     // delegate watchdog timeout (seconds)
+
+// RSSI re-evaluation decay coefficient (Q4.4: stored as uint8_t, 0x08 = 0.5)
+#define NVS_DEFAULT_RSSI_DEC_K     0x08    // 0.5 in Q4.4
+#define NVS_DEFAULT_BAT_TENURE     false   // include battery in tenure score?
 
 // BOOT button — GPIO9 on ESP32-C6 (boot strapping pin, not GPIO0 like classic ESP32)
 #define BOOT_BUTTON_PIN        GPIO_NUM_9

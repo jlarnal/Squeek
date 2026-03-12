@@ -1,4 +1,5 @@
 #include "web_server.h"
+#include "credential_table.h"
 #include "storage_manager.h"
 #include "property_value.h"
 #include "peer_table.h"
@@ -8,6 +9,7 @@
 #include "nvs_config.h"
 #include "power_manager.h"
 #include "mesh_conductor.h"
+#include "ftm_scheduler.h"
 #include "rtc_state.h"
 
 #include <ESPAsyncWebServer.h>
@@ -30,51 +32,45 @@
 static const char* TAG = "webserver";
 
 // ---------------------------------------------------------------------------
-// WiFi credential NVS helpers (raw string API — PropertyValue only does scalars)
+// WiFi credential helpers — delegate to CredentialTable slot 0
 // ---------------------------------------------------------------------------
-static constexpr char NVS_KEY_WIFI_SSID[] = "wifiSsid";
-static constexpr char NVS_KEY_WIFI_PASS[] = "wifiPass";
 
 bool SqWebServer::loadWifiCreds(char* ssid, size_t ssidLen, char* pass, size_t passLen) {
-    if (!NvsConfig::isOpen) return false;
-    size_t sLen = ssidLen;
-    esp_err_t err = nvs_get_str(NvsConfig::handle, NVS_KEY_WIFI_SSID, ssid, &sLen);
-    if (err != ESP_OK || sLen <= 1) return false;   // empty or missing
-    size_t pLen = passLen;
-    err = nvs_get_str(NvsConfig::handle, NVS_KEY_WIFI_PASS, pass, &pLen);
-    if (err != ESP_OK) { pass[0] = '\0'; }           // open network OK
-    return true;
+    return CredentialTable::get(0, ssid, ssidLen, pass, passLen);
 }
 
 bool SqWebServer::saveWifiCreds(const char* ssid, const char* pass) {
-    if (!NvsConfig::isOpen) return false;
-    esp_err_t err = nvs_set_str(NvsConfig::handle, NVS_KEY_WIFI_SSID, ssid);
-    if (err != ESP_OK) { ESP_LOGE(TAG, "nvs_set_str(wifiSsid) failed: %s", esp_err_to_name(err)); return false; }
-    err = nvs_set_str(NvsConfig::handle, NVS_KEY_WIFI_PASS, pass ? pass : "");
-    if (err != ESP_OK) { ESP_LOGE(TAG, "nvs_set_str(wifiPass) failed: %s", esp_err_to_name(err)); return false; }
-    nvs_commit(NvsConfig::handle);
-    ESP_LOGI(TAG, "WiFi credentials saved to NVS (SSID=%s)", ssid);
+    int8_t slot = CredentialTable::add(ssid, pass);
+    if (slot < 0) {
+        ESP_LOGE(TAG, "Failed to save WiFi creds — table full");
+        return false;
+    }
+    ESP_LOGI(TAG, "WiFi credentials saved to slot %d (SSID=%s)", slot, ssid);
 
-    // Reset delegate attempt counter — creds obtained successfully
-    RtcState::get()->delegate_attempts = 0;
+    // Reset delegate state — creds obtained successfully
+    rtc_state_t* rtc = RtcState::get();
+    rtc->delegate_attempts = 0;
+    memset(rtc->ticket_delegate_mac, 0, 6);
+    rtc->ticket_remaining_s = 0;
     RtcState::save();
 
     return true;
 }
 
 bool SqWebServer::clearWifiCreds() {
+    // CredentialTable doesn't support clearing individual slots yet,
+    // but the legacy API only cleared the single wifiSsid/wifiPass keys.
+    // For backward compat, erase the legacy keys if they exist.
     if (!NvsConfig::isOpen) return false;
-    nvs_erase_key(NvsConfig::handle, NVS_KEY_WIFI_SSID);
-    nvs_erase_key(NvsConfig::handle, NVS_KEY_WIFI_PASS);
+    nvs_erase_key(NvsConfig::handle, "wifiSsid");
+    nvs_erase_key(NvsConfig::handle, "wifiPass");
     nvs_commit(NvsConfig::handle);
-    ESP_LOGI(TAG, "WiFi credentials cleared from NVS");
+    ESP_LOGI(TAG, "Legacy WiFi credentials cleared from NVS");
     return true;
 }
 
 bool SqWebServer::hasWifiCreds() {
-    char ssid[33];
-    char pass[65];
-    return loadWifiCreds(ssid, sizeof(ssid), pass, sizeof(pass));
+    return CredentialTable::hasAny();
 }
 
 
@@ -456,6 +452,16 @@ void SqWebServer::registerRoutes() {
         char buf[32];
         snprintf(buf, sizeof(buf), "{\"steps\":%u}", Orchestrator::sequenceCount());
         request->send(200, "application/json", buf);
+    });
+
+    // ----- POST /api/sweep -----
+    s_server->on("/api/sweep", HTTP_POST, [](AsyncWebServerRequest* request) {
+        if (!MeshConductor::isGateway()) {
+            request->send(403, "application/json", "{\"error\":\"gateway only\"}");
+            return;
+        }
+        FtmScheduler::enqueueFullSweep();
+        request->send(200, "application/json", "{\"ok\":true}");
     });
 
     // ----- POST /api/reboot -----

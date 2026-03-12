@@ -31,6 +31,9 @@ enum MeshMsgType : uint8_t {
     MSG_TYPE_SCAN_RESULT     = 0x86,  // peer → gateway: scan result (ssid count)
     MSG_TYPE_DELEGATE_TICKET = 0x87,  // old gateway → new gateway: delegate tracking
     MSG_TYPE_DELEGATE_TICKET_ACK = 0x88,  // new gateway → old gateway
+    // Credential exchange
+    MSG_TYPE_CRED_OFFER  = 0x90,  // gateway → peer: all known credentials
+    MSG_TYPE_CRED_REPLY  = 0x91,  // peer → gateway: merged creds + tenure score
 };
 
 // --- Heartbeat message (peer → gateway) ---
@@ -41,6 +44,8 @@ struct __attribute__((packed)) HeartbeatMsg {
     uint16_t battery_mv;
     uint8_t  flags;          // awake/sleeping/low-battery
     uint8_t  softap_mac[6];  // SoftAP MAC (for FTM targeting)
+    int8_t   router_rssi;    // best known router RSSI (-128 = none)
+    uint16_t tenure_score;   // computed tenure fitness score
 };
 
 // --- FTM protocol messages ---
@@ -165,6 +170,25 @@ struct __attribute__((packed)) DelegateTicketMsg {
     uint16_t remaining_s;    // monotonic countdown, floors at zero
 };
 
+// --- Credential exchange messages ---
+
+struct __attribute__((packed)) CredOfferMsg {
+    uint8_t type;           // MSG_TYPE_CRED_OFFER
+    uint8_t count;          // number of cred entries following
+    // followed by count × CredWireEntry (from credential_table.h)
+    // total payload written by CredentialTable::toBuffer()
+};
+
+struct __attribute__((packed)) CredReplyMsg {
+    uint8_t  type;           // MSG_TYPE_CRED_REPLY
+    uint8_t  count;          // number of cred entries following
+    uint16_t tenure_score;   // peer's computed tenure score
+    // followed by count × CredReplyEntry (from credential_table.h)
+};
+
+// --- Tenure score computation (RAM-only, never persisted) ---
+uint16_t computeTenureScore(int8_t best_rssi_dBm);
+
 // --- Role identifier ---
 
 enum class RoleId : uint8_t { PEER = 0, GATEWAY = 1, DELEGATE = 2 };
@@ -194,6 +218,7 @@ public:
     void printStatus() override;
     void startDelegation();           // button-triggered: scan contest or self-delegate
     void onScanResult(const uint8_t* mac, uint8_t ssid_count);
+    void trackPeerTenure(uint16_t tenure);  // track best peer tenure from heartbeats
     bool hasDelegateTicket() const;   // true if a delegate is out (remaining_s > 0)
     void installTicket(const uint8_t* delegateMac, uint16_t remaining_s);
     void transferTicket(const uint8_t* newGwMac);  // send ticket to new GW before stepping down
@@ -259,6 +284,10 @@ public:
 
     // Battery rotation
     static void requestStepDown();
+
+    // RSSI tracking
+    static int8_t bestRouterRssi();
+    static void   setBestRouterRssi(int8_t rssi);
 
 private:
     MeshConductor() = delete;

@@ -23,6 +23,7 @@
 #include <esp_system.h>
 #include <esp_mac.h>
 #include <esp_wifi.h>
+#include <esp_mesh.h>
 #include <WiFi.h>
 #include <string.h>
 #include <driver/temperature_sensor.h>
@@ -162,11 +163,39 @@ static void cmd_wifi(const char* args) {
             Serial.println("Usage: wifi set <ssid> [password]");
             return;
         }
-        if (SqWebServer::saveWifiCreds(arg1, arg2[0] ? arg2 : "")) {
-            Serial.printf("WiFi credentials saved: SSID=%s\n", arg1);
-            Serial.println("Reboot to apply (run: reboot)");
-        } else {
+        const char* pass = arg2[0] ? arg2 : "";
+        if (!SqWebServer::saveWifiCreds(arg1, pass)) {
             Serial.println("Failed to save WiFi credentials");
+            return;
+        }
+        Serial.printf("WiFi credentials saved: SSID=%s\n", arg1);
+
+        // Propagate to the mesh
+        if (MeshConductor::isConnected()) {
+            WifiCredsMsg msg = {};
+            msg.type = MSG_TYPE_WIFI_CREDS;
+            strncpy(msg.ssid, arg1, 32);
+            strncpy(msg.password, pass, 64);
+
+            if (esp_mesh_is_root()) {
+                // Gateway: broadcast to all peers, then reboot to apply router config
+                Serial.println("Broadcasting credentials to mesh...");
+                MeshConductor::broadcastToAll(&msg, sizeof(msg));
+                Serial.println("Rebooting in 2s to apply router config...");
+                TimerHandle_t t = xTimerCreate("cliReboot", pdMS_TO_TICKS(2000),
+                    pdFALSE, nullptr, [](TimerHandle_t timer) {
+                        xTimerDelete(timer, 0);
+                        esp_restart();
+                    });
+                if (t) xTimerStart(t, 0);
+            } else {
+                // Peer: forward to gateway — it will broadcast + reboot
+                Serial.println("Sending credentials to gateway...");
+                MeshConductor::sendToRoot(&msg, sizeof(msg));
+                Serial.println("Gateway will broadcast to mesh and reboot.");
+            }
+        } else {
+            Serial.println("Mesh not connected — saved locally only. Reboot to apply.");
         }
     }
     else if (strcmp(sub, "clear") == 0) {

@@ -150,6 +150,10 @@ void PeerTable::scanStaleness() {
 }
 
 void PeerTable::checkReelection() {
+    // Battery-based reelection only when battery is factored into tenure
+    if (!(bool)NvsConfigManager::batteryInTenure)
+        return;
+
     // Cooldown: skip if too soon after the last step-down
     uint32_t cooldown_ms = (uint32_t)(uint16_t)NvsConfigManager::reelectionCooldown_s * 1000u;
     if (s_lastReelectionMs != 0 && (millis() - s_lastReelectionMs) < cooldown_ms)

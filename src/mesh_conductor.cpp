@@ -1,4 +1,5 @@
 #include "mesh_conductor.h"
+#include "credential_table.h"
 #include "peer_table.h"
 #include "ftm_manager.h"
 #include "ftm_scheduler.h"
@@ -48,7 +49,7 @@ static volatile bool s_credAckReceived = false;
 
 // Mesh state
 static uint8_t     s_parentRetries  = 0;
-static uint16_t    s_gwTenure       = 0;        // cached from NVS
+static int8_t      s_bestRouterRssi = -128;     // best RSSI to a known router (from boot scan)
 static bool        s_hasRouterCreds = false;     // true when real WiFi creds loaded
 
 // Routerless bootstrap: one-shot timer to self-elect as root
@@ -94,8 +95,9 @@ static void bootstrapTimerCb(TimerHandle_t timer) {
 
 // Compute a deterministic bootstrap delay from the node's MAC address.
 // Lower MAC hash → shorter delay → that node becomes root first.
-// Range: 5-30s, spread by FNV-1a hash of MAC.
-static uint32_t macBasedBootstrapDelay() {
+// Credless  (ch1, fast discovery):  5-30s  (25s spread)
+// Credentialed (ch0, slow scanning): 60-120s (60s spread)
+static uint32_t macBasedBootstrapDelay(bool hasCreds) {
     uint8_t mac[6];
     esp_read_mac(mac, ESP_MAC_WIFI_STA);
 
@@ -106,20 +108,30 @@ static uint32_t macBasedBootstrapDelay() {
         h *= 16777619u;
     }
 
-    // Map to 5-30s range
+    if (hasCreds) {
+        // 60s base (let ESP-MESH try to find router) + up to 60s spread
+        return 60000 + (h % 60001);
+    }
+    // 5-30s for credless
     return 5000 + (h % 25001);
 }
 
-// Schedule the bootstrap timer (if appropriate).
+// Schedule the bootstrap timer (safety net for mesh formation).
 // Called once from start(), before NO_PARENT_FOUND ever fires.
+// Credless nodes: 5-30s MAC-based delay (fast convergence on fixed ch1).
+// Credentialed nodes: 60s + MAC-based delay (give router/mesh time to appear,
+//   but don't wait forever — creds may be wrong or router may be down).
+// Cancelled by FIND_NETWORK event if a mesh is discovered before timeout.
 static void scheduleBootstrapTimer() {
-    if (s_hasRouterCreds || s_bootstrapTimer) return;  // not routerless, or already scheduled
+    if (s_bootstrapTimer) return;  // already scheduled
 
     bool isDelegateReturn = RtcState::isValid() && RtcState::get()->delegate_active;
     if (isDelegateReturn) return;  // returning delegate must rejoin, not self-promote
 
-    uint32_t delay = macBasedBootstrapDelay();
-    SqLog.printf("[mesh] Bootstrap timer: self-election in %lu ms (MAC-based)\n", delay);
+    uint32_t delay = macBasedBootstrapDelay(s_hasRouterCreds);
+
+    SqLog.printf("[mesh] Bootstrap timer: self-election in %lu ms (MAC-based%s)\n",
+                 delay, s_hasRouterCreds ? ", credentialed" : "");
     s_bootstrapTimer = xTimerCreate("bootstrap", pdMS_TO_TICKS(delay),
                                      pdFALSE, nullptr, bootstrapTimerCb);
     if (s_bootstrapTimer) xTimerStart(s_bootstrapTimer, 0);
@@ -159,23 +171,41 @@ static SemaphoreHandle_t s_configRespSema = nullptr;
 static char              s_configRespBuf[480];
 static uint8_t           s_configRespReqId = 0;
 
-// --- NVS tenure helpers ---
+// --- Tenure score computation (RAM-only, never persisted to NVS) ---
 
-static void nvsReadTenure() {
-    nvs_handle_t h;
-    if (nvs_open("squeek", NVS_READONLY, &h) == ESP_OK) {
-        nvs_get_u16(h, "gw_tenure", &s_gwTenure);
-        nvs_close(h);
-    }
-}
+uint16_t computeTenureScore(int8_t best_rssi_dBm) {
+    uint16_t score = 128;
 
-static void nvsWriteTenure() {
-    nvs_handle_t h;
-    if (nvs_open("squeek", NVS_READWRITE, &h) == ESP_OK) {
-        nvs_set_u16(h, "gw_tenure", s_gwTenure);
-        nvs_commit(h);
-        nvs_close(h);
+    // RSSI component: 0..~80 (only if a known router is detected)
+    if (best_rssi_dBm > -128) {
+        int16_t rssi_contrib = (int16_t)LOWEST_TOLERATED_RSSI + (int16_t)best_rssi_dBm;
+        if (rssi_contrib < 0)   rssi_contrib = 0;
+        if (rssi_contrib > 80)  rssi_contrib = 80;
+        score += (uint16_t)rssi_contrib;
     }
+
+    // Battery component: 0..100
+    // When disabled (USB-powered boards read false low), assume full battery (100).
+    if ((bool)NvsConfigManager::batteryInTenure) {
+        int32_t bat = PowerManager::batteryMv();
+        int32_t bat_contrib = 0;
+        if (bat > BATTERY_LOW_MV) {
+            bat_contrib = (bat - BATTERY_LOW_MV) * 100 / (4200 - BATTERY_LOW_MV);
+            if (bat_contrib > 100) bat_contrib = 100;
+        }
+        score += (uint16_t)bat_contrib;
+    } else {
+        score += 100;  // assume full battery
+    }
+
+    // Uptime stability component: 0..50
+    uint32_t uptime_u16 = (uint32_t)(millis() >> 16);  // ~65s granularity
+    uint32_t up_contrib = uptime_u16;
+    if (up_contrib > 65535) up_contrib = 65535;
+    up_contrib = up_contrib * 50 / 65535;
+    score += (uint16_t)up_contrib;
+
+    return score;
 }
 
 // --- RTC map update (carried over from mesh_manager) ---
@@ -239,9 +269,8 @@ static void assignRoleFromMeshState() {
     s_roleAssigned = true;
     if (amRoot) {
         s_connected = true;  // Root is "connected" even without a router
-        s_gwTenure++;
-        nvsWriteTenure();
-        SqLog.println("[mesh] Role assigned: GATEWAY (I am root)");
+        SqLog.printf("[mesh] Role assigned: GATEWAY (tenure=%u)\n",
+                     computeTenureScore(s_bestRouterRssi));
         uint8_t own_mac[6];
         esp_read_mac(own_mac, ESP_MAC_WIFI_STA);
         memcpy(s_gatewayMac, own_mac, 6);
@@ -296,11 +325,16 @@ static void meshRxTask(void* pvParameters) {
         if (data.size >= 1) {
             uint8_t msgType = rx_buf[0];
 
-            if (msgType == MSG_TYPE_HEARTBEAT && data.size >= sizeof(HeartbeatMsg)) {
+            if (msgType == MSG_TYPE_HEARTBEAT && data.size >= 15) {
                 HeartbeatMsg* hb = (HeartbeatMsg*)rx_buf;
                 if (s_role && s_role->roleId() == RoleId::GATEWAY) {
                     PeerTable::updateFromHeartbeat(hb->mac, hb->battery_mv,
                                                     hb->flags, hb->softap_mac);
+                    // Track best peer tenure for RSSI re-evaluation
+                    // (older nodes send 15-byte heartbeats without tenure fields)
+                    if (data.size >= sizeof(HeartbeatMsg)) {
+                        static_cast<Gateway*>(s_role)->trackPeerTenure(hb->tenure_score);
+                    }
                 }
             }
             else if (msgType == MSG_TYPE_FTM_WAKE && data.size >= sizeof(FtmWakeMsg)) {
@@ -436,13 +470,12 @@ static void meshRxTask(void* pvParameters) {
                 wc->ssid[32] = '\0';      // safety null-terminate
                 wc->password[64] = '\0';
 
-                // Only save if creds are new or changed
-                char curSsid[33] = {}, curPass[65] = {};
-                bool haveCreds = SqWebServer::loadWifiCreds(curSsid, sizeof(curSsid), curPass, sizeof(curPass));
-                bool credsChanged = !haveCreds || strcmp(curSsid, wc->ssid) != 0 || strcmp(curPass, wc->password) != 0;
+                // Add to credential table (deduplicates by SSID)
+                int8_t slot = CredentialTable::add(wc->ssid, wc->password);
+                bool credsChanged = (slot >= 0);
                 if (credsChanged) {
-                    SqWebServer::saveWifiCreds(wc->ssid, wc->password);
-                    SqLog.printf("[mesh] Saved WiFi credentials (SSID=%s)\n", wc->ssid);
+                    SqLog.printf("[mesh] Saved WiFi credentials to slot %d (SSID=%s)\n",
+                                 slot, wc->ssid);
                 } else {
                     SqLog.printf("[mesh] WiFi credentials unchanged (SSID=%s)\n", wc->ssid);
                 }
@@ -583,6 +616,98 @@ static void meshRxTask(void* pvParameters) {
                 if (s_role && s_role->roleId() == RoleId::GATEWAY) {
                     Gateway* gw = static_cast<Gateway*>(s_role);
                     gw->onScanResult(sr->mac, sr->ssid_count);
+                }
+            }
+            // --- Credential exchange protocol ---
+            else if (msgType == MSG_TYPE_CRED_OFFER && data.size >= 2) {
+                // Peer receives cred offer from gateway
+                SqLog.println("[mesh] CRED_OFFER received from gateway");
+                uint8_t offerCount = rx_buf[1];
+                // Import credentials (skip type+count header, pass rest to fromBuffer)
+                // The buffer after type byte is: count + CredWireEntry[]
+                uint8_t added = CredentialTable::fromBuffer(&rx_buf[1], data.size - 1);
+                SqLog.printf("[mesh] Imported %u new credentials from gateway (%u offered)\n",
+                             added, offerCount);
+
+                // Run a quick scan to measure RSSI to known routers
+                wifi_scan_config_t scanCfg = {};
+                scanCfg.show_hidden = false;
+                scanCfg.scan_type = WIFI_SCAN_TYPE_ACTIVE;
+                scanCfg.scan_time.active.min = 100;
+                scanCfg.scan_time.active.max = 300;
+                esp_err_t scanErr = esp_wifi_scan_start(&scanCfg, true);
+
+                int8_t myBestRssi = -128;
+                if (scanErr == ESP_OK) {
+                    uint16_t apCount = 0;
+                    esp_wifi_scan_get_ap_num(&apCount);
+                    if (apCount > 0) {
+                        uint16_t maxAps = (apCount > 20) ? 20 : apCount;
+                        wifi_ap_record_t* aps = (wifi_ap_record_t*)malloc(maxAps * sizeof(wifi_ap_record_t));
+                        if (aps) {
+                            esp_wifi_scan_get_ap_records(&maxAps, aps);
+                            ScanMatch match = CredentialTable::matchScan(aps, maxAps);
+                            if (match.slot >= 0) {
+                                myBestRssi = match.rssi;
+                                s_bestRouterRssi = myBestRssi;
+                            }
+                            free(aps);
+                        } else {
+                            esp_wifi_clear_ap_list();
+                        }
+                    } else {
+                        esp_wifi_clear_ap_list();
+                    }
+                }
+
+                // Build CRED_REPLY: our merged creds + per-AP RSSI + tenure score
+                uint16_t myTenure = computeTenureScore(myBestRssi);
+
+                // Serialize: type(1) + count(1) + tenure(2) + CredWireEntry[] payload
+                // Heap-allocate — meshRxTask stack is only 4KB with rx_buf[512] already on it
+                uint8_t* replyBuf = (uint8_t*)malloc(1024);
+                if (replyBuf) {
+                    replyBuf[0] = MSG_TYPE_CRED_REPLY;
+                    replyBuf[2] = (uint8_t)(myTenure & 0xFF);
+                    replyBuf[3] = (uint8_t)(myTenure >> 8);
+
+                    uint16_t credLen = CredentialTable::toBuffer(&replyBuf[4], 1024 - 4);
+                    replyBuf[1] = replyBuf[4];  // count byte from toBuffer
+                    uint16_t totalLen = 4 + credLen;
+
+                    MeshConductor::sendToNode(from.addr, replyBuf, totalLen);
+                    SqLog.printf("[mesh] Sent CRED_REPLY (tenure=%u, rssi=%d)\n",
+                                 myTenure, myBestRssi);
+                    free(replyBuf);
+                }
+            }
+            else if (msgType == MSG_TYPE_CRED_REPLY && data.size >= 4) {
+                // Gateway receives cred reply from peer
+                if (s_role && s_role->roleId() == RoleId::GATEWAY) {
+                    uint8_t credCount = rx_buf[1];
+                    uint16_t peerTenure = (uint16_t)rx_buf[2] | ((uint16_t)rx_buf[3] << 8);
+                    SqLog.printf("[mesh] CRED_REPLY from peer: tenure=%u, creds=%u\n",
+                                 peerTenure, credCount);
+
+                    // Import peer's credentials (skip type+count+tenure header)
+                    // The buffer at offset 4 is toBuffer format: count(1) + entries
+                    if (data.size > 4) {
+                        uint8_t added = CredentialTable::fromBuffer(&rx_buf[4], data.size - 4);
+                        if (added > 0) {
+                            SqLog.printf("[mesh] Learned %u new credentials from peer\n", added);
+                            // Recompute our RSSI if we gained new cred knowledge
+                            // (deferred to next heartbeat re-evaluation)
+                        }
+                    }
+
+                    // Compare tenure scores
+                    uint16_t myTenure = computeTenureScore(s_bestRouterRssi);
+                    SqLog.printf("[mesh] Tenure comparison: mine=%u, peer=%u\n",
+                                 myTenure, peerTenure);
+                    if (peerTenure > myTenure) {
+                        SqLog.println("[mesh] Peer has higher tenure — waiving root");
+                        MeshConductor::requestStepDown();
+                    }
                 }
             }
         }
@@ -796,8 +921,8 @@ void MeshConductor::init() {
         nvs_flash_init();
     }
 
-    nvsReadTenure();
-    SqLog.printf("[mesh] Gateway tenure from NVS: %u\n", s_gwTenure);
+    CredentialTable::init();
+    SqLog.printf("[mesh] Credential table: %u slot(s)\n", CredentialTable::count());
 
     // Config response semaphore
     if (!s_configRespSema)
@@ -866,9 +991,12 @@ void MeshConductor::start() {
     }
 
     // Channel selection:
-    //  - Router creds active: channel=0 (scan for router)
+    //  - Router creds active: channel=0 (scan for router on any channel)
     //  - Delegate return (creds suppressed): channel=0 (scan all channels for existing mesh)
-    //  - Routerless bootstrap: channel=1 (fixed so all nodes converge)
+    //  - Routerless bootstrap: channel=1 (fixed so all credless nodes converge)
+    // NOTE: channel=0 for credless nodes was tried but breaks routerless bootstrap:
+    // ESP-MESH drops to STA-only during channel scanning, so no AP beacons are
+    // emitted and nodes can't discover each other before bootstrap timers fire.
     bool isDelegateReturn = RtcState::isValid() && RtcState::get()->delegate_active;
     cfg.channel = (s_hasRouterCreds || isDelegateReturn) ? 0 : 1;
 
@@ -999,7 +1127,9 @@ void MeshConductor::printStatus() {
         esp_wifi_get_channel(&primary, &secondary);
         Serial.printf("Channel: %u\n", primary);
     }
-    Serial.printf("Gateway tenure: %u\n", s_gwTenure);
+    Serial.printf("Tenure score: %u (rssi=%d)\n",
+        computeTenureScore(s_bestRouterRssi), s_bestRouterRssi);
+    Serial.printf("Credentials: %u slot(s)\n", CredentialTable::count());
 
     int total = esp_mesh_get_total_node_num();
     Serial.printf("Total nodes: %d\n", total);
@@ -1196,4 +1326,12 @@ void MeshConductor::setGatewayMac(const uint8_t* mac) {
 
 const PeerSyncEntry* MeshConductor::peerShadowEntries() {
     return s_peerShadow;
+}
+
+int8_t MeshConductor::bestRouterRssi() {
+    return s_bestRouterRssi;
+}
+
+void MeshConductor::setBestRouterRssi(int8_t rssi) {
+    s_bestRouterRssi = rssi;
 }
