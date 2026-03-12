@@ -164,6 +164,31 @@ static void cmd_wifi(const char* args) {
             return;
         }
         const char* pass = arg2[0] ? arg2 : "";
+
+        // Verify SSID is visible before saving
+        Serial.printf("Scanning for SSID \"%s\"...\n", arg1);
+        int n = WiFi.scanNetworks(false, false, false, 300);
+        bool found = false;
+        int8_t bestRssi = -128;
+        uint8_t bestCh = 0;
+        for (int i = 0; i < n; i++) {
+            if (strcmp(WiFi.SSID(i).c_str(), arg1) == 0) {
+                found = true;
+                if (WiFi.RSSI(i) > bestRssi) {
+                    bestRssi = WiFi.RSSI(i);
+                    bestCh = WiFi.channel(i);
+                }
+            }
+        }
+        WiFi.scanDelete();
+
+        if (!found) {
+            Serial.printf("SSID \"%s\" not found in scan — credentials NOT saved.\n", arg1);
+            Serial.println("Check SSID spelling (case-sensitive) and router proximity.");
+            return;
+        }
+        Serial.printf("Found \"%s\" on ch%u (RSSI %d)\n", arg1, bestCh, bestRssi);
+
         if (!SqWebServer::saveWifiCreds(arg1, pass)) {
             Serial.println("Failed to save WiFi credentials");
             return;
