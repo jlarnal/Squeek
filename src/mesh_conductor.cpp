@@ -1,4 +1,5 @@
 #include "mesh_conductor.h"
+#include "espnow_election.h"
 #include "credential_table.h"
 #include "peer_table.h"
 #include "ftm_manager.h"
@@ -52,10 +53,7 @@ static uint8_t     s_parentRetries  = 0;
 static int8_t      s_bestRouterRssi = -128;     // best RSSI to a known router (from boot scan)
 static bool        s_hasRouterCreds = false;     // true when real WiFi creds loaded
 
-// Routerless bootstrap: one-shot timer to self-elect as root
-static TimerHandle_t s_bootstrapTimer = nullptr;
-
-static void assignRoleFromMeshState();  // forward decl for bootstrapTimerCb
+static void assignRoleFromMeshState();  // forward decl
 
 // Channel lock — stop continuous scanning after mesh forms
 static void lockChannel() {
@@ -70,71 +68,6 @@ static void lockChannel() {
             SqLog.printf("[mesh] Channel locked to %d\n", primary);
         }
     }
-}
-
-// Routerless bootstrap: self-elect as root after deterministic timeout
-// Uses MAC-based delay so the lowest-MAC node wins the race every time.
-static void bootstrapTimerCb(TimerHandle_t timer) {
-    xTimerDelete(timer, 0);
-    s_bootstrapTimer = nullptr;
-
-    if (s_connected || esp_mesh_is_root()) return;  // already resolved
-
-    SqLog.println("[mesh] Bootstrap timeout — self-electing as root");
-    esp_err_t err = esp_mesh_set_type(MESH_ROOT);
-    if (err != ESP_OK) {
-        SqLog.printf("[mesh] set_type(ROOT) failed: %s\n", esp_err_to_name(err));
-        return;
-    }
-
-    // In routerless mode, PARENT_CONNECTED won't fire, so assign role directly
-    if (!s_roleAssigned) {
-        assignRoleFromMeshState();
-    }
-}
-
-// Compute a deterministic bootstrap delay from the node's MAC address.
-// Lower MAC hash → shorter delay → that node becomes root first.
-// Credless  (ch1, fast discovery):  5-30s  (25s spread)
-// Credentialed (ch0, slow scanning): 60-120s (60s spread)
-static uint32_t macBasedBootstrapDelay(bool hasCreds) {
-    uint8_t mac[6];
-    esp_read_mac(mac, ESP_MAC_WIFI_STA);
-
-    // FNV-1a hash of MAC → uniform distribution
-    uint32_t h = 2166136261u;
-    for (int i = 0; i < 6; i++) {
-        h ^= mac[i];
-        h *= 16777619u;
-    }
-
-    if (hasCreds) {
-        // 60s base (let ESP-MESH try to find router) + up to 60s spread
-        return 60000 + (h % 60001);
-    }
-    // 5-30s for credless
-    return 5000 + (h % 25001);
-}
-
-// Schedule the bootstrap timer (safety net for mesh formation).
-// Called once from start(), before NO_PARENT_FOUND ever fires.
-// Credless nodes: 5-30s MAC-based delay (fast convergence on fixed ch1).
-// Credentialed nodes: 60s + MAC-based delay (give router/mesh time to appear,
-//   but don't wait forever — creds may be wrong or router may be down).
-// Cancelled by FIND_NETWORK event if a mesh is discovered before timeout.
-static void scheduleBootstrapTimer() {
-    if (s_bootstrapTimer) return;  // already scheduled
-
-    bool isDelegateReturn = RtcState::isValid() && RtcState::get()->delegate_active;
-    if (isDelegateReturn) return;  // returning delegate must rejoin, not self-promote
-
-    uint32_t delay = macBasedBootstrapDelay(s_hasRouterCreds);
-
-    SqLog.printf("[mesh] Bootstrap timer: self-election in %lu ms (MAC-based%s)\n",
-                 delay, s_hasRouterCreds ? ", credentialed" : "");
-    s_bootstrapTimer = xTimerCreate("bootstrap", pdMS_TO_TICKS(delay),
-                                     pdFALSE, nullptr, bootstrapTimerCb);
-    if (s_bootstrapTimer) xTimerStart(s_bootstrapTimer, 0);
 }
 
 // BOOT button — routes to delegate (if gateway)
@@ -743,11 +676,6 @@ static void meshEventHandler(void* arg, esp_event_base_t event_base,
         SqLog.println("[mesh] Parent connected");
         s_connected = true;
         s_parentRetries = 0;
-        if (s_bootstrapTimer) {
-            xTimerStop(s_bootstrapTimer, 0);
-            xTimerDelete(s_bootstrapTimer, 0);
-            s_bootstrapTimer = nullptr;
-        }
         lockChannel();  // Stop continuous scanning — mesh channel is known
         if (esp_mesh_is_root()) {
             SqLog.println("[mesh] I am ROOT");
@@ -857,8 +785,6 @@ static void meshEventHandler(void* arg, esp_event_base_t event_base,
         s_parentRetries++;
         SqLog.printf("[mesh] No parent found (attempt %u)\n", s_parentRetries);
 
-        // Bootstrap timer is already running from start() — nothing to schedule here.
-
         // Root with real creds that can't reach router: reboot after retries
         if (esp_mesh_is_root() && s_hasRouterCreds && s_parentRetries >= MESH_MAX_RETRIES) {
             SqLog.println("[mesh] Root can't reach router — rebooting");
@@ -891,13 +817,6 @@ static void meshEventHandler(void* arg, esp_event_base_t event_base,
     case MESH_EVENT_FIND_NETWORK: {
         mesh_event_find_network_t* net = (mesh_event_find_network_t*)event_data;
         SqLog.printf("[mesh] Found network on channel %d\n", net->channel);
-        // Cancel bootstrap timer — no need to self-elect, we found an existing mesh
-        if (s_bootstrapTimer) {
-            SqLog.println("[mesh] Cancelling bootstrap — found existing network");
-            xTimerStop(s_bootstrapTimer, 0);
-            xTimerDelete(s_bootstrapTimer, 0);
-            s_bootstrapTimer = nullptr;
-        }
         break;
     }
 
@@ -970,46 +889,62 @@ void MeshConductor::start() {
     }
     s_meshStarting = true;
 
+    // --- Load credentials ---
+    char ssid[33] = {}, pass[65] = {};
+    bool credsInNvs = SqWebServer::loadWifiCreds(ssid, sizeof(ssid), pass, sizeof(pass));
+    bool suppressCreds = RtcState::isValid() && RtcState::get()->delegate_active;
+    s_hasRouterCreds = credsInNvs && !suppressCreds;
+
+    // --- Determine if election should run ---
+    bool isDelegateReturn = RtcState::isValid() && RtcState::get()->delegate_active;
+    bool skipElection = isDelegateReturn || (s_role != nullptr);  // pre-assigned role = skip
+
+    // --- Run ESP-NOW election (or skip) ---
+    ElectionResult election = {};
+    if (!skipElection) {
+        election = EspNowElection::run();
+    } else {
+        SqLog.println("[mesh] Skipping election (delegate return or pre-assigned role)");
+        esp_read_mac(election.winner_mac, ESP_MAC_WIFI_STA);
+        election.i_am_winner    = false;
+        election.target_channel = 0;  // scan all
+        election.candidate_count = 0;
+    }
+
+    // --- Configure mesh ---
     mesh_cfg_t cfg = MESH_INIT_CONFIG_DEFAULT();
     memcpy((uint8_t*)&cfg.mesh_id, s_meshId, 6);
 
-    // Router config: populate with real creds if available, else placeholder
+    // Router config
     memset(&cfg.router, 0, sizeof(cfg.router));
-    {
-        char ssid[33] = {}, pass[65] = {};
-        bool credsInNvs = SqWebServer::loadWifiCreds(ssid, sizeof(ssid), pass, sizeof(pass));
-        bool suppressCreds = RtcState::isValid() && RtcState::get()->delegate_active;
-        s_hasRouterCreds = credsInNvs && !suppressCreds;
-        if (s_hasRouterCreds) {
-            memcpy(cfg.router.ssid, ssid, strlen(ssid));
-            cfg.router.ssid_len = strlen(ssid);
-            memcpy(cfg.router.password, pass, strlen(pass));
-            SqLog.printf("[mesh] Router config set: SSID=%s (auto-channel)\n", ssid);
-        } else if (suppressCreds) {
-            SqLog.println("[mesh] Suppressing router creds (delegate return — rejoin mesh first)");
-        }
+    if (s_hasRouterCreds) {
+        memcpy(cfg.router.ssid, ssid, strlen(ssid));
+        cfg.router.ssid_len = strlen(ssid);
+        memcpy(cfg.router.password, pass, strlen(pass));
+        SqLog.printf("[mesh] Router config set: SSID=%s\n", ssid);
+    } else if (suppressCreds) {
+        SqLog.println("[mesh] Suppressing router creds (delegate return)");
     }
 
-    // Channel selection:
-    //  - Router creds active: channel=0 (scan for router on any channel)
-    //  - Delegate return (creds suppressed): channel=0 (scan all channels for existing mesh)
-    //  - Routerless bootstrap: channel=1 (fixed so all credless nodes converge)
-    // NOTE: channel=0 for credless nodes was tried but breaks routerless bootstrap:
-    // ESP-MESH drops to STA-only during channel scanning, so no AP beacons are
-    // emitted and nodes can't discover each other before bootstrap timers fire.
-    bool isDelegateReturn = RtcState::isValid() && RtcState::get()->delegate_active;
-    cfg.channel = (s_hasRouterCreds || isDelegateReturn) ? 0 : 1;
+    // Channel: election result if available, otherwise legacy fallback
+    if (!skipElection && election.candidate_count > 0) {
+        cfg.channel = election.target_channel;
+        SqLog.printf("[mesh] Channel from election: %u\n", cfg.channel);
+    } else if (isDelegateReturn) {
+        cfg.channel = 0;  // scan all for existing mesh
+    } else if (s_hasRouterCreds) {
+        cfg.channel = 0;  // scan for router
+    } else {
+        cfg.channel = 1;  // routerless fallback
+    }
 
-    // Mesh AP settings (no password for Phase 1)
+    // Mesh AP settings
     cfg.mesh_ap.max_connection = 6;
     memset(cfg.mesh_ap.password, 0, sizeof(cfg.mesh_ap.password));
-
-    // No encryption for Phase 1
     cfg.crypto_funcs = NULL;
 
     esp_err_t err = esp_mesh_set_config(&cfg);
     if (err == ESP_ERR_MESH_ARGUMENT) {
-        // SSID check failed — use placeholder (routerless mesh)
         const char* ph = "SQUEEK_MESH";
         memcpy(cfg.router.ssid, ph, strlen(ph));
         cfg.router.ssid_len = strlen(ph);
@@ -1017,26 +952,34 @@ void MeshConductor::start() {
         ESP_ERROR_CHECK(esp_mesh_set_config(&cfg));
     }
 
-    // Configure mesh topology
     ESP_ERROR_CHECK(esp_mesh_set_max_layer(MESH_MAX_LAYER));
     ESP_ERROR_CHECK(esp_mesh_set_self_organized(true, true));
 
-    // Reset state — don't reset s_role (may have been set by boot path)
-    s_roleAssigned = (s_role != nullptr);  // if role pre-assigned, skip assignment
+    // Election winner becomes root before mesh starts
+    if (!skipElection && election.i_am_winner) {
+        SqLog.println("[mesh] Election winner — setting MESH_ROOT before start");
+        esp_mesh_set_type(MESH_ROOT);
+    }
+
+    // Reset state
+    s_roleAssigned = (s_role != nullptr);
     s_parentRetries = 0;
 
     ESP_ERROR_CHECK(esp_mesh_start());
     SqLog.println("[mesh] Mesh starting...");
 
-    // Suppress noisy ESP-MESH internal logs when routerless (reason=201 spam)
+    // Suppress noisy ESP-MESH internal logs when routerless
     if (!s_hasRouterCreds) {
         esp_log_level_set("mesh", ESP_LOG_WARN);
         esp_log_level_set("wifi", ESP_LOG_WARN);
     }
 
-    // Start bootstrap timer immediately — don't wait for NO_PARENT_FOUND (60 scans, ~3 min).
-    // MAC-based delay ensures deterministic root election order.
-    scheduleBootstrapTimer();
+    // Routerless winner: PARENT_CONNECTED won't fire, assign role directly
+    if (!skipElection && election.i_am_winner && !s_hasRouterCreds) {
+        if (!s_roleAssigned) {
+            assignRoleFromMeshState();
+        }
+    }
 }
 
 void MeshConductor::onBootButton() {
@@ -1047,11 +990,6 @@ void MeshConductor::onBootButton() {
     } else if (!s_connected && !esp_mesh_is_root()) {
         // Disconnected node — force self-election as root
         SqLog.println("[mesh] BOOT button — forcing root self-election");
-        if (s_bootstrapTimer) {
-            xTimerStop(s_bootstrapTimer, 0);
-            xTimerDelete(s_bootstrapTimer, 0);
-            s_bootstrapTimer = nullptr;
-        }
         esp_err_t err = esp_mesh_set_type(MESH_ROOT);
         if (err != ESP_OK) {
             SqLog.printf("[mesh] set_type(ROOT) failed: %s\n", esp_err_to_name(err));
@@ -1066,11 +1004,6 @@ void MeshConductor::onBootButton() {
 }
 
 void MeshConductor::stop() {
-    if (s_bootstrapTimer) {
-        xTimerStop(s_bootstrapTimer, 0);
-        xTimerDelete(s_bootstrapTimer, 0);
-        s_bootstrapTimer = nullptr;
-    }
     if (s_role) {
         s_role->end();
         delete s_role;

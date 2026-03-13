@@ -24,6 +24,7 @@ idf_component_register(SRCS
     "clock_sync.cpp"
     "web_server.cpp"
     "mesh_delegate.cpp"
+    "espnow_election.cpp"
     "stealth_manager.cpp"
     "ota_manager.cpp"
 )
