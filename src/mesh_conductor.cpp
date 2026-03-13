@@ -51,6 +51,10 @@ static volatile bool s_credAckReceived = false;
 // Mesh state
 static uint8_t     s_parentRetries  = 0;
 static int8_t      s_bestRouterRssi = -128;     // best RSSI to a known router (from boot scan)
+
+// ESP-NOW election result (computed in init(), consumed in start())
+static ElectionResult s_electionResult = {};
+static bool           s_electionRan    = false;
 static bool        s_hasRouterCreds = false;     // true when real WiFi creds loaded
 
 static void assignRoleFromMeshState();  // forward decl
@@ -863,6 +867,21 @@ void MeshConductor::init() {
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
     ESP_ERROR_CHECK(esp_wifi_start());
 
+    // ESP-NOW election runs here — BEFORE esp_mesh_init() which takes over WiFi internals
+    bool isDelegateReturn = RtcState::isValid() && RtcState::get()->delegate_active;
+    bool skipElection = isDelegateReturn || false;  // no pre-assigned role known at init time
+    // Note: s_role may be set later by boot path; start() handles that case
+    if (!skipElection) {
+        // Load creds early to set s_hasRouterCreds for election context
+        char ssid[33] = {}, pass[65] = {};
+        bool credsInNvs = SqWebServer::loadWifiCreds(ssid, sizeof(ssid), pass, sizeof(pass));
+        bool suppressCreds = isDelegateReturn;
+        s_hasRouterCreds = credsInNvs && !suppressCreds;
+
+        s_electionResult = EspNowElection::run();
+        s_electionRan = true;
+    }
+
     // Initialize mesh
     ESP_ERROR_CHECK(esp_mesh_init());
 
@@ -889,22 +908,18 @@ void MeshConductor::start() {
     }
     s_meshStarting = true;
 
-    // --- Load credentials ---
+    // --- Load credentials (may already be loaded by init() for election) ---
     char ssid[33] = {}, pass[65] = {};
     bool credsInNvs = SqWebServer::loadWifiCreds(ssid, sizeof(ssid), pass, sizeof(pass));
     bool suppressCreds = RtcState::isValid() && RtcState::get()->delegate_active;
     s_hasRouterCreds = credsInNvs && !suppressCreds;
 
-    // --- Determine if election should run ---
-    bool isDelegateReturn = RtcState::isValid() && RtcState::get()->delegate_active;
-    bool skipElection = isDelegateReturn || (s_role != nullptr);  // pre-assigned role = skip
-
-    // --- Run ESP-NOW election (or skip) ---
+    // --- Use election result from init(), or skip if it didn't run ---
     ElectionResult election = {};
-    if (!skipElection) {
-        election = EspNowElection::run();
+    if (s_electionRan) {
+        election = s_electionResult;
     } else {
-        SqLog.println("[mesh] Skipping election (delegate return or pre-assigned role)");
+        SqLog.println("[mesh] No election ran (delegate return or pre-assigned role)");
         esp_read_mac(election.winner_mac, ESP_MAC_WIFI_STA);
         election.i_am_winner    = false;
         election.target_channel = 0;  // scan all
@@ -927,7 +942,8 @@ void MeshConductor::start() {
     }
 
     // Channel: election result if available, otherwise legacy fallback
-    if (!skipElection && election.candidate_count > 0) {
+    bool isDelegateReturn = RtcState::isValid() && RtcState::get()->delegate_active;
+    if (s_electionRan && election.candidate_count > 0) {
         cfg.channel = election.target_channel;
         SqLog.printf("[mesh] Channel from election: %u\n", cfg.channel);
     } else if (isDelegateReturn) {
@@ -956,7 +972,7 @@ void MeshConductor::start() {
     ESP_ERROR_CHECK(esp_mesh_set_self_organized(true, true));
 
     // Election winner becomes root before mesh starts
-    if (!skipElection && election.i_am_winner) {
+    if (s_electionRan && election.i_am_winner) {
         SqLog.println("[mesh] Election winner — setting MESH_ROOT before start");
         esp_mesh_set_type(MESH_ROOT);
     }
@@ -975,7 +991,7 @@ void MeshConductor::start() {
     }
 
     // Routerless winner: PARENT_CONNECTED won't fire, assign role directly
-    if (!skipElection && election.i_am_winner && !s_hasRouterCreds) {
+    if (s_electionRan && election.i_am_winner && !s_hasRouterCreds) {
         if (!s_roleAssigned) {
             assignRoleFromMeshState();
         }
