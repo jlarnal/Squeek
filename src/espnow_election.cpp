@@ -109,9 +109,8 @@ static void broadcastSelf() {
     frame[7] = (uint8_t)(s_ownTenure >> 8);
     frame[8] = s_ownTarget;
 
-    // Send twice for redundancy
+    // Send twice for redundancy (no delay — back-to-back is fine for ESP-NOW)
     esp_now_send(NULL, frame, ELECTION_FRAME_SIZE);
-    vTaskDelay(pdMS_TO_TICKS(10));
     esp_now_send(NULL, frame, ELECTION_FRAME_SIZE);
 
     s_hasBroadcast = true;
@@ -136,6 +135,7 @@ static void silenceTimerCb(TimerHandle_t timer) {
 }
 
 static void espnowRecvCb(const esp_now_recv_info_t* info, const uint8_t* data, int len) {
+    (void)info;
     if (len < ELECTION_FRAME_SIZE) return;
 
     uint8_t  mac[6];
@@ -233,6 +233,8 @@ ElectionResult EspNowElection::run() {
     // Reset state
     s_candidateCount = 0;
     s_hasBroadcast   = false;
+    s_ownTarget      = 1;
+    s_ownTenure      = 0;
     memset(s_candidates, 0, sizeof(s_candidates));
 
     // --- Phase 1: Scan & Score ---
@@ -281,7 +283,7 @@ ElectionResult EspNowElection::run() {
     xTimerStart(s_broadcastTimer, 0);
     xTimerStart(s_silenceTimer, 0);
 
-    SqLog.printf("[election] Timers armed: broadcast=%lums, silence=%ums\n",
+    SqLog.printf("[election] Timers armed: broadcast=%ums, silence=%ums\n",
                  bcastDelay, ELECTION_SILENCE_MS);
 
     // Block until silence timer expires (max ~6.5s: 3s broadcast + 3.5s silence)
