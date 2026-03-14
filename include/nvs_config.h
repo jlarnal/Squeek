@@ -49,6 +49,10 @@ inline constexpr char NVS_KEY_RSSI_DK[] = "rssiDk";
 // Battery in tenure
 inline constexpr char NVS_KEY_BAT_TEN[] = "batTen";
 
+// Election
+inline constexpr char NVS_KEY_EL_SLOT[] = "elSlot";
+inline constexpr char NVS_KEY_EL_ANN[]  = "elAnn";
+
 // --- Default values (sourced from BSP defines for single-point maintenance) ---
 
 inline constexpr bool     DEFAULT_LEDS_ENABLED       = NVS_DEFAULT_LEDS_ENABLED;
@@ -84,6 +88,10 @@ inline constexpr uint16_t DEFAULT_DELEGATE_TMO          = NVS_DEFAULT_DELEGATE_T
 // RSSI re-evaluation
 inline constexpr uint8_t  DEFAULT_RSSI_DEC_K            = NVS_DEFAULT_RSSI_DEC_K;
 inline constexpr bool     DEFAULT_BAT_TENURE            = NVS_DEFAULT_BAT_TENURE;
+
+// Election
+inline constexpr uint16_t DEFAULT_ELECT_SLOT_MS         = NVS_DEFAULT_ELECT_SLOT_MS;
+inline constexpr uint16_t DEFAULT_ELECT_ANN_MS          = NVS_DEFAULT_ELECT_ANN_MS;
 
 // Phase 2: FTM defaults
 inline constexpr uint8_t  DEFAULT_FTM_NEW_ANCHORS    = NVS_DEFAULT_FTM_NEW_ANCHORS;
@@ -161,6 +169,9 @@ namespace nvs_detail {
         h = fnvByte(h, DEFAULT_RSSI_DEC_K);
         // Battery in tenure
         h = fnvBool(h, DEFAULT_BAT_TENURE);
+        // Election
+        h = fnvU32(h, (uint32_t)DEFAULT_ELECT_SLOT_MS);
+        h = fnvU32(h, (uint32_t)DEFAULT_ELECT_ANN_MS);
         return h;
     }
 }
@@ -230,6 +241,10 @@ public:
 
     // Battery in tenure score (off by default — USB-powered boards read false low)
     static PropertyValue<NVS_KEY_BAT_TEN, bool, NvsConfigManager> batteryInTenure;
+
+    // Election timing
+    static PropertyValue<NVS_KEY_EL_SLOT, uint16_t, NvsConfigManager> electionSlot_ms;
+    static PropertyValue<NVS_KEY_EL_ANN,  uint16_t, NvsConfigManager> electionAnnounce_ms;
 };
 
 #endif // NVS_CONFIG_H

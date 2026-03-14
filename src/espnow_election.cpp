@@ -11,6 +11,7 @@
 #include <esp_mac.h>
 #include <esp_random.h>
 #include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include <freertos/timers.h>
 #include <freertos/semphr.h>
 #include <string.h>
@@ -22,18 +23,14 @@ static uint8_t           s_candidateCount = 0;
 static uint8_t           s_ownMac[6];
 static uint16_t          s_ownTenure  = 0;
 static uint8_t           s_ownTarget  = 1;       // default: ch1 (routerless)
-static bool              s_hasBroadcast = false;  // true after first broadcast sent
-static SemaphoreHandle_t s_doneSema   = nullptr;  // signalled when silence timer expires
 
-static TimerHandle_t     s_broadcastTimer = nullptr;
-static TimerHandle_t     s_silenceTimer   = nullptr;
+static const uint8_t     s_broadcastAddr[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 // --- Forward declarations ---
 static void addCandidate(const uint8_t* mac, uint16_t tenure, uint8_t channel);
 static void broadcastSelf();
-static void broadcastTimerCb(TimerHandle_t timer);
-static void silenceTimerCb(TimerHandle_t timer);
 static void espnowRecvCb(const esp_now_recv_info_t* info, const uint8_t* data, int len);
+static void espnowSendCb(const wifi_tx_info_t* info, esp_now_send_status_t status);
 static ElectionResult resolveWinner();
 
 // --- Phase 1: Scan & Score ---
@@ -99,7 +96,7 @@ static void scanAndScore() {
     SqLog.printf("[election] Tenure=%u target_ch=%u\n", s_ownTenure, s_ownTarget);
 }
 
-// --- Phase 2: ESP-NOW election ---
+// --- Broadcast helpers ---
 
 static void broadcastSelf() {
     // Frame: mac[6] + tenure_score[2] + target_channel[1]
@@ -109,28 +106,12 @@ static void broadcastSelf() {
     frame[7] = (uint8_t)(s_ownTenure >> 8);
     frame[8] = s_ownTarget;
 
-    // Send twice for redundancy (no delay — back-to-back is fine for ESP-NOW)
-    esp_now_send(NULL, frame, ELECTION_FRAME_SIZE);
-    esp_now_send(NULL, frame, ELECTION_FRAME_SIZE);
-
-    s_hasBroadcast = true;
-    SqLog.printf("[election] Broadcast sent (tenure=%u, ch=%u)\n", s_ownTenure, s_ownTarget);
-}
-
-static void broadcastTimerCb(TimerHandle_t timer) {
-    (void)timer;
-    broadcastSelf();
-    // Reset silence timer (we just made noise)
-    if (s_silenceTimer) {
-        xTimerReset(s_silenceTimer, 0);
-    }
-}
-
-static void silenceTimerCb(TimerHandle_t timer) {
-    (void)timer;
-    SqLog.println("[election] Silence timer expired — election complete");
-    if (s_doneSema) {
-        xSemaphoreGive(s_doneSema);
+    // Send twice for redundancy (back-to-back is fine for ESP-NOW)
+    esp_err_t e1 = esp_now_send(s_broadcastAddr, frame, ELECTION_FRAME_SIZE);
+    esp_err_t e2 = esp_now_send(s_broadcastAddr, frame, ELECTION_FRAME_SIZE);
+    if (e1 != ESP_OK || e2 != ESP_OK) {
+        SqLog.printf("[election] Send error: %s / %s\n",
+                     esp_err_to_name(e1), esp_err_to_name(e2));
     }
 }
 
@@ -150,19 +131,13 @@ static void espnowRecvCb(const esp_now_recv_info_t* info, const uint8_t* data, i
                  mac[0], mac[1], mac[5], tenure, channel);
 
     addCandidate(mac, tenure, channel);
+}
 
-    // Reset silence timer (we heard someone)
-    if (s_silenceTimer) {
-        xTimerReset(s_silenceTimer, 0);
+static void espnowSendCb(const wifi_tx_info_t* info, esp_now_send_status_t status) {
+    (void)info;
+    if (status != ESP_NOW_SEND_SUCCESS) {
+        SqLog.printf("[election] ESP-NOW send FAILED (status=%d)\n", status);
     }
-
-    // If we haven't broadcast yet, restart random timer (defer to avoid collision)
-    if (!s_hasBroadcast && s_broadcastTimer) {
-        uint32_t newDelay = esp_random() % ELECTION_BCAST_MAX_MS;
-        if (newDelay < 100) newDelay = 100;  // floor at 100ms
-        xTimerChangePeriod(s_broadcastTimer, pdMS_TO_TICKS(newDelay), 0);
-    }
-    // If we already broadcast, don't touch broadcast timer
 }
 
 static void addCandidate(const uint8_t* mac, uint16_t tenure, uint8_t channel) {
@@ -185,7 +160,7 @@ static void addCandidate(const uint8_t* mac, uint16_t tenure, uint8_t channel) {
     }
 }
 
-// --- Phase 3: Resolve winner ---
+// --- Resolve winner ---
 
 static ElectionResult resolveWinner() {
     ElectionResult result = {};
@@ -232,7 +207,6 @@ ElectionResult EspNowElection::run() {
 
     // Reset state
     s_candidateCount = 0;
-    s_hasBroadcast   = false;
     s_ownTarget      = 1;
     s_ownTenure      = 0;
     memset(s_candidates, 0, sizeof(s_candidates));
@@ -240,11 +214,43 @@ ElectionResult EspNowElection::run() {
     // --- Phase 1: Scan & Score ---
     scanAndScore();
 
-    // --- Phase 2: ESP-NOW election ---
+    // --- Phase 2: ESP-NOW slotted election ---
 
-    // Lock WiFi to channel 1 for election
-    esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
-    SqLog.println("[election] WiFi locked to ch1 for election");
+    // Read NVS-configurable timing
+    uint16_t slotMs = (uint16_t)NvsConfigManager::electionSlot_ms;
+    uint16_t annMs  = (uint16_t)NvsConfigManager::electionAnnounce_ms;
+    if (slotMs < 5)  slotMs = 5;    // sanity floor
+    if (annMs  < 100) annMs = 100;
+
+    // Compute broadcast slot from MAC LSB: MAC(6)[0] * slotMs + jitter[0..slotMs-1]
+    uint8_t macLsb = s_ownMac[5];   // last byte of 6-byte MAC array = LSB
+    uint32_t slotBase  = (uint32_t)macLsb * slotMs;
+    uint32_t jitter    = esp_random() % slotMs;
+    uint32_t mySlotMs  = slotBase + jitter;
+    uint32_t windowMs  = 256u * slotMs;        // total broadcast window
+    uint32_t totalMs   = windowMs + annMs;      // full election duration
+    uint32_t hardLimit = totalMs + 1000;        // safety ceiling
+
+    SqLog.printf("[election] Slot: LSB=0x%02X base=%ums jitter=%ums (window=%ums, announce=%ums)\n",
+                 macLsb, slotBase, jitter, windowMs, annMs);
+
+    // Ensure scan resources are fully released before changing channel
+    esp_wifi_clear_ap_list();
+    vTaskDelay(pdMS_TO_TICKS(50));
+
+    // Lock WiFi to channel 1 for election — verify it actually took
+    esp_err_t chErr = esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
+    uint8_t actualCh = 0;
+    wifi_second_chan_t secCh;
+    esp_wifi_get_channel(&actualCh, &secCh);
+    if (chErr != ESP_OK || actualCh != 1) {
+        SqLog.printf("[election] Channel set problem: err=%s actual_ch=%u — retrying\n",
+                     esp_err_to_name(chErr), actualCh);
+        vTaskDelay(pdMS_TO_TICKS(100));
+        esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
+        esp_wifi_get_channel(&actualCh, &secCh);
+    }
+    SqLog.printf("[election] WiFi on ch%u for election\n", actualCh);
 
     // Init ESP-NOW
     esp_err_t err = esp_now_init();
@@ -258,58 +264,73 @@ ElectionResult EspNowElection::run() {
     // Register broadcast peer (FF:FF:FF:FF:FF:FF)
     esp_now_peer_info_t peer = {};
     memset(peer.peer_addr, 0xFF, 6);
-    peer.channel = 1;
+    peer.channel = 1;       // must match WiFi channel set above
     peer.ifidx   = WIFI_IF_STA;
     peer.encrypt = false;
-    esp_now_add_peer(&peer);
+    err = esp_now_add_peer(&peer);
+    if (err != ESP_OK) {
+        SqLog.printf("[election] esp_now_add_peer failed: %s\n", esp_err_to_name(err));
+    }
+    if (!esp_now_is_peer_exist(s_broadcastAddr)) {
+        SqLog.println("[election] WARNING: broadcast peer not found after add!");
+    }
 
-    // Register receive callback
+    // Register callbacks
     esp_now_register_recv_cb(espnowRecvCb);
+    esp_now_register_send_cb(espnowSendCb);
 
-    // Create semaphore for "election done" signal
-    s_doneSema = xSemaphoreCreateBinary();
+    // --- Phase 2A: Slotted candidate broadcast ---
+    // Wait for our deterministic slot, then broadcast once.
+    // All nodes listen for the entire window.
+    uint32_t t0 = (uint32_t)millis();
 
-    // Arm random broadcast timer
-    uint32_t bcastDelay = esp_random() % ELECTION_BCAST_MAX_MS;
-    if (bcastDelay < 100) bcastDelay = 100;  // floor
-    s_broadcastTimer = xTimerCreate("elBcast", pdMS_TO_TICKS(bcastDelay),
-                                     pdFALSE, nullptr, broadcastTimerCb);
+    // Sleep until our slot
+    if (mySlotMs > 0) {
+        vTaskDelay(pdMS_TO_TICKS(mySlotMs));
+    }
 
-    // Arm silence timer (3500ms)
-    s_silenceTimer = xTimerCreate("elSilence", pdMS_TO_TICKS(ELECTION_SILENCE_MS),
-                                   pdFALSE, nullptr, silenceTimerCb);
+    broadcastSelf();
+    SqLog.printf("[election] Broadcast at slot %ums (tenure=%u, ch=%u)\n",
+                 mySlotMs, s_ownTenure, s_ownTarget);
 
-    // Start both timers
-    xTimerStart(s_broadcastTimer, 0);
-    xTimerStart(s_silenceTimer, 0);
+    // Wait for the rest of the broadcast window
+    uint32_t elapsed = (uint32_t)millis() - t0;
+    if (elapsed < windowMs) {
+        vTaskDelay(pdMS_TO_TICKS(windowMs - elapsed));
+    }
 
-    SqLog.printf("[election] Timers armed: broadcast=%ums, silence=%ums\n",
-                 bcastDelay, ELECTION_SILENCE_MS);
+    // --- Phase 2B: Winner announcement ---
+    // Resolve winner from candidates heard so far, then the winner
+    // hammers its announcement 10× during the announce window.
+    // Non-winners listen — if they hear a better candidate they
+    // update their candidate table and re-resolve at the end.
+    ElectionResult preliminary = resolveWinner();
+    SqLog.printf("[election] Preliminary: %s — entering announcement phase (%ums)\n",
+                 preliminary.i_am_winner ? "I won" : "deferred", annMs);
 
-    // Block until silence timer expires (max ~6.5s: 3s broadcast + 3.5s silence)
-    // Hard ceiling of 15s to prevent infinite hang
-    if (xSemaphoreTake(s_doneSema, pdMS_TO_TICKS(15000)) == pdFALSE) {
-        SqLog.println("[election] Hard timeout — forcing election end");
+    uint32_t annStart = (uint32_t)millis();
+    if (preliminary.i_am_winner) {
+        // Announce 10 times, evenly spaced across the announce window
+        uint32_t spacing = annMs / 10;
+        for (int i = 0; i < 10; i++) {
+            broadcastSelf();
+            uint32_t annElapsed = (uint32_t)millis() - annStart;
+            uint32_t nextAt = (uint32_t)(i + 1) * spacing;
+            if (annElapsed < nextAt && i < 9) {
+                vTaskDelay(pdMS_TO_TICKS(nextAt - annElapsed));
+            }
+        }
+        SqLog.println("[election] Winner announcements sent (10x)");
+    } else {
+        // Non-winner: just listen for the duration
+        vTaskDelay(pdMS_TO_TICKS(annMs));
     }
 
     // --- Cleanup ---
-    if (s_broadcastTimer) {
-        xTimerStop(s_broadcastTimer, 0);
-        xTimerDelete(s_broadcastTimer, 0);
-        s_broadcastTimer = nullptr;
-    }
-    if (s_silenceTimer) {
-        xTimerStop(s_silenceTimer, 0);
-        xTimerDelete(s_silenceTimer, 0);
-        s_silenceTimer = nullptr;
-    }
-    vSemaphoreDelete(s_doneSema);
-    s_doneSema = nullptr;
-
     esp_now_unregister_recv_cb();
     esp_now_deinit();
     SqLog.println("[election] ESP-NOW torn down");
 
-    // --- Phase 3: Resolve winner ---
+    // --- Final resolution (may differ from preliminary if announcement was heard) ---
     return resolveWinner();
 }

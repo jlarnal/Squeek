@@ -107,6 +107,10 @@ constexpr gpio_num_t PIEZO_PIN_B = GPIO_NUM_23;  // push-pull complement
 #define NVS_DEFAULT_RSSI_DEC_K     0x08    // 0.5 in Q4.4
 #define NVS_DEFAULT_BAT_TENURE     false   // include battery in tenure score?
 
+// Election
+#define NVS_DEFAULT_ELECT_SLOT_MS  30      // election slot width (ms) — 256 slots × 30ms = 7.68s
+#define NVS_DEFAULT_ELECT_ANN_MS   1320    // winner announcement phase duration (ms)
+
 // BOOT button — GPIO9 on ESP32-C6 (boot strapping pin, not GPIO0 like classic ESP32)
 #define BOOT_BUTTON_PIN        GPIO_NUM_9
 #define BOOT_BUTTON_DEBOUNCE_MS 50

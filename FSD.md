@@ -438,6 +438,10 @@ LOW_BATTERY → DEEP_SLEEP (timer-only wake for periodic check)
 
 All major subsystem classes use the **static class** pattern: deleted constructor, all-static public API, file-scope state in the `.cpp` file. This avoids singleton boilerplate while keeping state encapsulated.
 
+### 7.0 Banned APIs
+
+**Arduino `WiFi` class (`WiFi.h`) — DO NOT USE.** ESP-MESH creates and owns the STA+AP netifs. Arduino's WiFi wrapper internally calls `esp_netif_create_default_wifi_ap()` / `esp_netif_create_default_wifi_sta()`, which asserts and crashes on duplicate netif keys. Use ESP-IDF APIs directly: `esp_wifi_scan_start()`, `esp_wifi_get_mode()`, `esp_netif_get_ip_info()`, etc.
+
 ### 7.1 NvsConfigManager & PropertyValue
 
 `NvsConfigManager` owns all persistent user-facing settings. Each setting is a `PropertyValue<nvsKey, T, Owner>` instance — a typed wrapper that auto-persists to NVS on assignment and restricts write access to the `friend Owner` class.

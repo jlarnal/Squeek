@@ -4,6 +4,7 @@
 #include <nvs.h>
 #include <esp_log.h>
 #include <string.h>
+#include "i18n_strings.h"
 
 // NVS handle and state, defined in nvs_config.cpp
 namespace NvsConfig {
@@ -47,16 +48,18 @@ public:
 
 private:
     T _value;
-    const char* _name;
+    const PropStrings* _strings;
     BeforeChangeFn _beforeChange = nullptr;
 
     // Direct load from NVS at startup (bypasses write-back and callback)
     void loadInitial(const T& value) { _value = value; }
 
 public:
-    PropertyValue(T init, const char* name = nvsKey) : _value(init), _name(name) {}
+    PropertyValue(T init, const PropStrings& strings) : _value(init), _strings(&strings) {}
 
-    const char* name() const { return _name; }
+    const char* name(Lang lang = Lang::EN) const { return i18nGet(_strings->name, lang); }
+    const char* description(Lang lang = Lang::EN) const { return i18nGet(_strings->description, lang); }
+    const PropStrings* strings() const { return _strings; }
 
     void setBeforeChange(BeforeChangeFn cb) { _beforeChange = cb; }
 

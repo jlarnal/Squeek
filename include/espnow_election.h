@@ -6,8 +6,6 @@
 
 #define ELECTION_MAX_CANDIDATES  16   // == MESH_MAX_NODES
 #define ELECTION_FRAME_SIZE       9   // mac[6] + tenure_score[2] + target_channel[1]
-#define ELECTION_SILENCE_MS    3500   // silence timer duration
-#define ELECTION_BCAST_MAX_MS  3000   // random broadcast delay max
 
 struct ElectionCandidate {
     uint8_t  mac[6];

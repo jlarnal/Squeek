@@ -3,15 +3,16 @@
 
 #include <ArduinoJson.h>
 #include <stdint.h>
+#include "i18n_strings.h"
 
 class Print;  // forward declaration
 
 enum ConfigType { CFG_BOOL, CFG_U32, CFG_FLOAT };
 
 struct ConfigField {
-    const char* key;         // NVS key (e.g. "hbInt")
-    const char* description; // human-readable (e.g. "Heartbeat interval (s)")
-    ConfigType  type;
+    const char*        key;      // NVS key (e.g. "hbInt")
+    const PropStrings* strings;  // i18n name + description
+    ConfigType         type;
 };
 
 // Build JSON with requested fields (all if count==0)
@@ -21,7 +22,7 @@ void configBuildJson(JsonDocument& doc, const char** fields, uint8_t count);
 uint8_t configApplyJson(const JsonObjectConst& obj);
 
 // Print all field names with descriptions
-void configListFields(Print& out);
+void configListFields(Print& out, Lang lang = Lang::EN);
 
 // Look up a field by key (returns nullptr if not found)
 const ConfigField* configLookup(const char* key);

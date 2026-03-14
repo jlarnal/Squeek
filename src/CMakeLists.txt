@@ -9,6 +9,7 @@ idf_component_register(SRCS
     "debug_cli.cpp"
     "nvs_config.cpp"
     "nvs_config_registry.cpp"
+    "i18n_strings.cpp"
     "peer_table.cpp"
     "credential_table.cpp"
     "ftm_manager.cpp"

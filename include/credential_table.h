@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <esp_wifi_types.h>
 
-#define CRED_TABLE_SLOTS  8
+#define CRED_TABLE_SLOTS  10
 #define CRED_SSID_MAX     32
 #define CRED_PASS_MAX     64
 
@@ -64,6 +64,9 @@ public:
     // Serialization for mesh exchange
     static uint16_t toBuffer(uint8_t* buf, uint16_t maxLen);
     static uint8_t  fromBuffer(const uint8_t* buf, uint16_t len);
+
+    // Clear all credential slots (NVS + RAM)
+    static void clear();
 
     // Direct slot access (for internal use)
     static const CredEntry* getSlot(uint8_t slot);

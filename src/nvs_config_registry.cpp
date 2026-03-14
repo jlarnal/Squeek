@@ -5,30 +5,32 @@
 // --- Registry table ---
 
 static const ConfigField s_fields[] = {
-    { NVS_KEY_LEDSEN,    "LEDs enabled",                CFG_BOOL  },
-    { NVS_KEY_CLR_INIT,  "Color: init (0xRRGGBB)",     CFG_U32   },
-    { NVS_KEY_CLR_RDY,   "Color: ready",               CFG_U32   },
-    { NVS_KEY_CLR_GW,    "Color: gateway",              CFG_U32   },
-    { NVS_KEY_CLR_PEER,  "Color: peer",                 CFG_U32   },
-    { NVS_KEY_CLR_DISC,  "Color: disconnected",         CFG_U32   },
-    { NVS_KEY_HB_INT,    "Heartbeat interval (s)",      CFG_U32   },
-    { NVS_KEY_HB_STALE,  "Heartbeat stale multiplier",  CFG_U32   },
-    { NVS_KEY_REEL_CD,   "Battery rotation cooldown (s)",  CFG_U32 },
-    { NVS_KEY_BAT_HYST,  "Battery hysteresis (mV)",       CFG_U32 },
-    { NVS_KEY_FTM_ANCH,  "FTM new-node anchors",        CFG_U32   },
-    { NVS_KEY_FTM_SAMP,  "FTM samples per pair",        CFG_U32   },
-    { NVS_KEY_FTM_TMO,   "FTM pair timeout (ms)",       CFG_U32   },
-    { NVS_KEY_FTM_KPN,   "FTM Kalman process noise",    CFG_FLOAT },
-    { NVS_KEY_FTM_OFS,   "FTM responder offset (cm)",   CFG_U32   },
-    { NVS_KEY_ORCH_MODE, "Orchestrator mode",            CFG_U32   },
-    { NVS_KEY_ORCH_TRVD, "Orch travel delay (ms)",       CFG_U32   },
-    { NVS_KEY_ORCH_RMIN, "Orch random min (ms)",         CFG_U32   },
-    { NVS_KEY_ORCH_RMAX, "Orch random max (ms)",         CFG_U32   },
-    { NVS_KEY_ORCH_TONE, "Orch tone index",              CFG_U32   },
-    { NVS_KEY_CSYNC_INT, "Clock sync interval (s)",      CFG_U32   },
-    { NVS_KEY_WEB_EN,   "Web UI enabled",              CFG_BOOL  },
-    { NVS_KEY_RSSI_DK,  "RSSI decay K (Q4.4)",         CFG_U32   },
-    { NVS_KEY_BAT_TEN,  "Battery in tenure score",     CFG_BOOL  },
+    { NVS_KEY_LEDSEN,    &I18N_LEDS_ENABLED,         CFG_BOOL  },
+    { NVS_KEY_CLR_INIT,  &I18N_COLOR_INIT,            CFG_U32   },
+    { NVS_KEY_CLR_RDY,   &I18N_COLOR_READY,           CFG_U32   },
+    { NVS_KEY_CLR_GW,    &I18N_COLOR_GATEWAY,         CFG_U32   },
+    { NVS_KEY_CLR_PEER,  &I18N_COLOR_PEER,            CFG_U32   },
+    { NVS_KEY_CLR_DISC,  &I18N_COLOR_DISCONNECTED,    CFG_U32   },
+    { NVS_KEY_HB_INT,    &I18N_HEARTBEAT_INTERVAL,    CFG_U32   },
+    { NVS_KEY_HB_STALE,  &I18N_HEARTBEAT_STALE,       CFG_U32   },
+    { NVS_KEY_REEL_CD,   &I18N_REELECTION_COOLDOWN,   CFG_U32   },
+    { NVS_KEY_BAT_HYST,  &I18N_BATTERY_HYSTERESIS,    CFG_U32   },
+    { NVS_KEY_FTM_ANCH,  &I18N_FTM_ANCHORS,           CFG_U32   },
+    { NVS_KEY_FTM_SAMP,  &I18N_FTM_SAMPLES,           CFG_U32   },
+    { NVS_KEY_FTM_TMO,   &I18N_FTM_TIMEOUT,           CFG_U32   },
+    { NVS_KEY_FTM_KPN,   &I18N_FTM_KALMAN_NOISE,      CFG_FLOAT },
+    { NVS_KEY_FTM_OFS,   &I18N_FTM_OFFSET,            CFG_U32   },
+    { NVS_KEY_ORCH_MODE, &I18N_ORCH_MODE,             CFG_U32   },
+    { NVS_KEY_ORCH_TRVD, &I18N_ORCH_TRAVEL_DELAY,    CFG_U32   },
+    { NVS_KEY_ORCH_RMIN, &I18N_ORCH_RANDOM_MIN,      CFG_U32   },
+    { NVS_KEY_ORCH_RMAX, &I18N_ORCH_RANDOM_MAX,      CFG_U32   },
+    { NVS_KEY_ORCH_TONE, &I18N_ORCH_TONE_INDEX,      CFG_U32   },
+    { NVS_KEY_CSYNC_INT, &I18N_CLOCK_SYNC_INTERVAL,  CFG_U32   },
+    { NVS_KEY_WEB_EN,    &I18N_WEB_ENABLED,           CFG_BOOL  },
+    { NVS_KEY_RSSI_DK,   &I18N_RSSI_DECAY_K,         CFG_U32   },
+    { NVS_KEY_BAT_TEN,   &I18N_BATTERY_IN_TENURE,    CFG_BOOL  },
+    { NVS_KEY_EL_SLOT,   &I18N_ELECTION_SLOT,        CFG_U32   },
+    { NVS_KEY_EL_ANN,    &I18N_ELECTION_ANNOUNCE,    CFG_U32   },
 };
 static constexpr uint8_t FIELD_COUNT = sizeof(s_fields) / sizeof(s_fields[0]);
 
@@ -59,6 +61,8 @@ static void getField(JsonDocument& doc, const ConfigField& f) {
     if (strcmp(f.key, NVS_KEY_WEB_EN) == 0)   { doc[f.key] = (bool)NvsConfigManager::webEnabled; return; }
     if (strcmp(f.key, NVS_KEY_RSSI_DK) == 0) { doc[f.key] = (uint32_t)(uint16_t)NvsConfigManager::rssiDecayK; return; }
     if (strcmp(f.key, NVS_KEY_BAT_TEN) == 0) { doc[f.key] = (bool)NvsConfigManager::batteryInTenure; return; }
+    if (strcmp(f.key, NVS_KEY_EL_SLOT) == 0) { doc[f.key] = (uint32_t)(uint16_t)NvsConfigManager::electionSlot_ms; return; }
+    if (strcmp(f.key, NVS_KEY_EL_ANN) == 0)  { doc[f.key] = (uint32_t)(uint16_t)NvsConfigManager::electionAnnounce_ms; return; }
 }
 
 // --- Setter helper: apply a JSON value to the matching PropertyValue ---
@@ -99,6 +103,8 @@ static bool setField(const char* key, JsonVariantConst val) {
     if (strcmp(key, NVS_KEY_WEB_EN) == 0)   { NvsConfigManager::webEnabled = val.as<bool>(); return true; }
     if (strcmp(key, NVS_KEY_RSSI_DK) == 0) { NvsConfigManager::rssiDecayK = (uint16_t)val.as<uint32_t>(); return true; }
     if (strcmp(key, NVS_KEY_BAT_TEN) == 0) { NvsConfigManager::batteryInTenure = val.as<bool>(); return true; }
+    if (strcmp(key, NVS_KEY_EL_SLOT) == 0) { NvsConfigManager::electionSlot_ms = (uint16_t)val.as<uint32_t>(); return true; }
+    if (strcmp(key, NVS_KEY_EL_ANN) == 0)  { NvsConfigManager::electionAnnounce_ms = (uint16_t)val.as<uint32_t>(); return true; }
     return false;
 }
 
@@ -147,11 +153,12 @@ uint8_t configApplyJson(const JsonObjectConst& obj) {
     return applied;
 }
 
-void configListFields(Print& out) {
+void configListFields(Print& out, Lang lang) {
     out.println("NVS Config Fields:");
     for (uint8_t i = 0; i < FIELD_COUNT; i++) {
         const char* typeStr = (s_fields[i].type == CFG_BOOL) ? "bool" :
                               (s_fields[i].type == CFG_FLOAT) ? "float" : "u32";
-        out.printf("  %-10s [%-5s]  %s\n", s_fields[i].key, typeStr, s_fields[i].description);
+        const char* desc = i18nGet(s_fields[i].strings->description, lang);
+        out.printf("  %-10s [%-5s]  %s\n", s_fields[i].key, typeStr, desc);
     }
 }

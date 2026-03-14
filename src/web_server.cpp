@@ -58,14 +58,7 @@ bool SqWebServer::saveWifiCreds(const char* ssid, const char* pass) {
 }
 
 bool SqWebServer::clearWifiCreds() {
-    // CredentialTable doesn't support clearing individual slots yet,
-    // but the legacy API only cleared the single wifiSsid/wifiPass keys.
-    // For backward compat, erase the legacy keys if they exist.
-    if (!NvsConfig::isOpen) return false;
-    nvs_erase_key(NvsConfig::handle, "wifiSsid");
-    nvs_erase_key(NvsConfig::handle, "wifiPass");
-    nvs_commit(NvsConfig::handle);
-    ESP_LOGI(TAG, "Legacy WiFi credentials cleared from NVS");
+    CredentialTable::clear();
     return true;
 }
 
@@ -376,7 +369,8 @@ void SqWebServer::registerRoutes() {
             if (!f) continue;
             JsonObject m = meta.add<JsonObject>();
             m["key"]  = f->key;
-            m["desc"] = f->description;
+            m["name"] = i18nGet(f->strings->name, Lang::EN);
+            m["desc"] = i18nGet(f->strings->description, Lang::EN);
             m["type"] = (f->type == CFG_BOOL) ? "bool" :
                         (f->type == CFG_FLOAT) ? "float" : "u32";
         }

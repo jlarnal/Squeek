@@ -984,14 +984,14 @@ void MeshConductor::start() {
     ESP_ERROR_CHECK(esp_mesh_start());
     SqLog.println("[mesh] Mesh starting...");
 
-    // Suppress noisy ESP-MESH internal logs when routerless
-    if (!s_hasRouterCreds) {
-        esp_log_level_set("mesh", ESP_LOG_WARN);
-        esp_log_level_set("wifi", ESP_LOG_WARN);
-    }
+    // Suppress noisy ESP-MESH/WiFi internal logs (reason=201 spam,
+    // mesh_schedule.c window warnings, etc.)
+    esp_log_level_set("mesh", ESP_LOG_ERROR);
+    esp_log_level_set("wifi", ESP_LOG_ERROR);
 
-    // Routerless winner: PARENT_CONNECTED won't fire, assign role directly
-    if (s_electionRan && election.i_am_winner && !s_hasRouterCreds) {
+    // Election winner: assign GATEWAY immediately (don't wait for PARENT_CONNECTED,
+    // which only fires if/when the router is reachable)
+    if (s_electionRan && election.i_am_winner) {
         if (!s_roleAssigned) {
             assignRoleFromMeshState();
         }

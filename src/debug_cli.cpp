@@ -17,6 +17,7 @@
 #include "orchestrator.h"
 #include "clock_sync.h"
 #include "web_server.h"
+#include "credential_table.h"
 #include "mesh_delegate.h"
 #include <Arduino.h>
 #include <ArduinoJson.h>
@@ -140,23 +141,37 @@ static void cmd_wifi(const char* args) {
     }
 
     if (strcmp(sub, "scan") == 0 || sub[0] == '\0') {
-        // Default: scan nearby APs (don't change WiFi mode if mesh is running)
-        Serial.println("Scanning WiFi (async)...");
-        int n = WiFi.scanNetworks(false, false, false, 300);
-        if (n == WIFI_SCAN_RUNNING) {
-            Serial.println("Scan already running.");
-        } else if (n == 0) {
-            Serial.println("No networks found.");
-        } else if (n < 0) {
-            Serial.println("Scan failed.");
+        // Use esp_wifi_scan directly — Arduino WiFi.scanNetworks() crashes
+        // when ESP-MESH is running (tries to create duplicate netif).
+        Serial.println("Scanning WiFi...");
+        wifi_scan_config_t scanCfg = {};
+        scanCfg.show_hidden = false;
+        scanCfg.scan_type   = WIFI_SCAN_TYPE_ACTIVE;
+        scanCfg.scan_time.active.min = 120;
+        scanCfg.scan_time.active.max = 300;
+        esp_err_t err = esp_wifi_scan_start(&scanCfg, true);
+        if (err != ESP_OK) {
+            Serial.printf("Scan failed: %s\n", esp_err_to_name(err));
         } else {
-            Serial.printf("Found %d networks:\n", n);
-            for (int i = 0; i < n; i++) {
-                Serial.printf("  [%d] %-32s  RSSI:%d  CH:%d\n",
-                    i + 1, WiFi.SSID(i).c_str(), WiFi.RSSI(i), WiFi.channel(i));
+            uint16_t apCount = 0;
+            esp_wifi_scan_get_ap_num(&apCount);
+            if (apCount == 0) {
+                Serial.println("No networks found.");
+            } else {
+                uint16_t maxAps = (apCount > 30) ? 30 : apCount;
+                wifi_ap_record_t* aps = (wifi_ap_record_t*)malloc(maxAps * sizeof(wifi_ap_record_t));
+                if (aps) {
+                    esp_wifi_scan_get_ap_records(&maxAps, aps);
+                    Serial.printf("Found %u networks:\n", maxAps);
+                    for (uint16_t i = 0; i < maxAps; i++) {
+                        Serial.printf("  [%u] %-32s  RSSI:%d  CH:%d\n",
+                            i + 1, (const char*)aps[i].ssid, aps[i].rssi, aps[i].primary);
+                    }
+                    free(aps);
+                }
             }
+            esp_wifi_clear_ap_list();
         }
-        WiFi.scanDelete();
     }
     else if (strcmp(sub, "set") == 0) {
         if (arg1[0] == '\0') {
@@ -165,22 +180,40 @@ static void cmd_wifi(const char* args) {
         }
         const char* pass = arg2[0] ? arg2 : "";
 
-        // Verify SSID is visible before saving
+        // Verify SSID is visible before saving — use esp_wifi_scan directly
+        // (Arduino WiFi.scanNetworks() crashes when ESP-MESH owns the netifs)
         Serial.printf("Scanning for SSID \"%s\"...\n", arg1);
-        int n = WiFi.scanNetworks(false, false, false, 300);
+        wifi_scan_config_t scanCfg = {};
+        scanCfg.show_hidden = false;
+        scanCfg.scan_type   = WIFI_SCAN_TYPE_ACTIVE;
+        scanCfg.scan_time.active.min = 120;
+        scanCfg.scan_time.active.max = 300;
+        esp_err_t scanErr = esp_wifi_scan_start(&scanCfg, true);
         bool found = false;
         int8_t bestRssi = -128;
         uint8_t bestCh = 0;
-        for (int i = 0; i < n; i++) {
-            if (strcmp(WiFi.SSID(i).c_str(), arg1) == 0) {
-                found = true;
-                if (WiFi.RSSI(i) > bestRssi) {
-                    bestRssi = WiFi.RSSI(i);
-                    bestCh = WiFi.channel(i);
+        if (scanErr == ESP_OK) {
+            uint16_t apCount = 0;
+            esp_wifi_scan_get_ap_num(&apCount);
+            uint16_t maxAps = (apCount > 30) ? 30 : apCount;
+            wifi_ap_record_t* aps = maxAps ? (wifi_ap_record_t*)malloc(maxAps * sizeof(wifi_ap_record_t)) : nullptr;
+            if (aps) {
+                esp_wifi_scan_get_ap_records(&maxAps, aps);
+                for (uint16_t i = 0; i < maxAps; i++) {
+                    if (strcmp((const char*)aps[i].ssid, arg1) == 0) {
+                        found = true;
+                        if (aps[i].rssi > bestRssi) {
+                            bestRssi = aps[i].rssi;
+                            bestCh = aps[i].primary;
+                        }
+                    }
                 }
+                free(aps);
             }
+            esp_wifi_clear_ap_list();
+        } else {
+            Serial.printf("Scan failed: %s\n", esp_err_to_name(scanErr));
         }
-        WiFi.scanDelete();
 
         if (!found) {
             Serial.printf("SSID \"%s\" not found in scan — credentials NOT saved.\n", arg1);
@@ -232,9 +265,8 @@ static void cmd_wifi(const char* args) {
         }
     }
     else if (strcmp(sub, "status") == 0) {
-        char ssid[33], pass[65];
-        bool hasCreds = SqWebServer::loadWifiCreds(ssid, sizeof(ssid), pass, sizeof(pass));
-        Serial.printf("Stored SSID: %s\n", hasCreds ? ssid : "(none)");
+        uint8_t credCount = CredentialTable::count();
+        Serial.printf("Stored credentials: %u/%d slots\n", credCount, CRED_TABLE_SLOTS);
         Serial.printf("Web server: %s\n", SqWebServer::isRunning() ? "running" : "stopped");
         IMeshRole* r = MeshConductor::role();
         Serial.printf("Setup Delegate: %s\n", (r && r->roleId() == RoleId::DELEGATE) ? "ACTIVE" : "inactive");
@@ -247,13 +279,17 @@ static void cmd_wifi(const char* args) {
                       WiFi.softAPIP().toString().c_str(), WiFi.softAPgetStationNum());
     }
     else if (strcmp(sub, "creds") == 0) {
-        char ssid[33], pass[65];
-        bool hasCreds = SqWebServer::loadWifiCreds(ssid, sizeof(ssid), pass, sizeof(pass));
-        if (hasCreds) {
-            Serial.printf("SSID: %s\n", ssid);
-            Serial.printf("Pass: %s\n", pass[0] ? pass : "(open)");
-        } else {
+        uint8_t n = CredentialTable::count();
+        if (n == 0) {
             Serial.println("No WiFi credentials stored.");
+        } else {
+            Serial.printf("%u credential(s):\n", n);
+            for (uint8_t i = 0; i < CRED_TABLE_SLOTS; i++) {
+                const CredEntry* e = CredentialTable::getSlot(i);
+                if (!e) continue;
+                Serial.printf("  [%u] SSID: %-32s  Pass: %s\n",
+                    i, e->ssid, e->pass[0] ? e->pass : "(open)");
+            }
         }
     }
     else if (strcmp(sub, "delegate") == 0) {

@@ -204,6 +204,22 @@ uint8_t CredentialTable::fromBuffer(const uint8_t* buf, uint16_t len) {
     return added;
 }
 
+void CredentialTable::clear() {
+    for (uint8_t i = 0; i < CRED_TABLE_SLOTS; i++) {
+        s_slots[i].populated = false;
+        s_slots[i].ssid[0] = '\0';
+        s_slots[i].pass[0] = '\0';
+        saveSlot(i);  // erases NVS keys + commits
+    }
+    // Also erase legacy keys so migration doesn't resurrect them
+    if (NvsConfig::isOpen) {
+        nvs_erase_key(NvsConfig::handle, "wifiSsid");
+        nvs_erase_key(NvsConfig::handle, "wifiPass");
+        nvs_commit(NvsConfig::handle);
+    }
+    ESP_LOGI(TAG, "All credential slots cleared");
+}
+
 const CredEntry* CredentialTable::getSlot(uint8_t slot) {
     if (slot >= CRED_TABLE_SLOTS) return nullptr;
     return s_slots[slot].populated ? &s_slots[slot] : nullptr;

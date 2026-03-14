@@ -12,54 +12,60 @@ nvs_handle_t handle = 0;
 bool isOpen         = false;
 }
 
-// Static member definitions with defaults + friendly names
-PropertyValue<NVS_KEY_SHASH, uint64_t, NvsConfigManager> NvsConfigManager::settingHash(SETTINGS_HASH, "Settings Hash");
-PropertyValue<NVS_KEY_LEDSEN, bool, NvsConfigManager>     NvsConfigManager::ledsEnabled(DEFAULT_LEDS_ENABLED, "LEDs Enabled");
-PropertyValue<NVS_KEY_CLR_INIT, uint32_t, NvsConfigManager> NvsConfigManager::colorInit(DEFAULT_CLR_INIT, "Color: Init");
-PropertyValue<NVS_KEY_CLR_RDY,  uint32_t, NvsConfigManager> NvsConfigManager::colorReady(DEFAULT_CLR_READY, "Color: Ready");
-PropertyValue<NVS_KEY_CLR_GW,   uint32_t, NvsConfigManager> NvsConfigManager::colorGateway(DEFAULT_CLR_GATEWAY, "Color: Gateway");
-PropertyValue<NVS_KEY_CLR_PEER, uint32_t, NvsConfigManager> NvsConfigManager::colorPeer(DEFAULT_CLR_PEER, "Color: Peer");
-PropertyValue<NVS_KEY_CLR_DISC, uint32_t, NvsConfigManager> NvsConfigManager::colorDisconnected(DEFAULT_CLR_DISCONNECTED, "Color: Disconnected");
+// Static member definitions with defaults + i18n strings
+PropertyValue<NVS_KEY_SHASH, uint64_t, NvsConfigManager> NvsConfigManager::settingHash(SETTINGS_HASH, I18N_SETTINGS_HASH);
+PropertyValue<NVS_KEY_LEDSEN, bool, NvsConfigManager>     NvsConfigManager::ledsEnabled(DEFAULT_LEDS_ENABLED, I18N_LEDS_ENABLED);
+PropertyValue<NVS_KEY_CLR_INIT, uint32_t, NvsConfigManager> NvsConfigManager::colorInit(DEFAULT_CLR_INIT, I18N_COLOR_INIT);
+PropertyValue<NVS_KEY_CLR_RDY,  uint32_t, NvsConfigManager> NvsConfigManager::colorReady(DEFAULT_CLR_READY, I18N_COLOR_READY);
+PropertyValue<NVS_KEY_CLR_GW,   uint32_t, NvsConfigManager> NvsConfigManager::colorGateway(DEFAULT_CLR_GATEWAY, I18N_COLOR_GATEWAY);
+PropertyValue<NVS_KEY_CLR_PEER, uint32_t, NvsConfigManager> NvsConfigManager::colorPeer(DEFAULT_CLR_PEER, I18N_COLOR_PEER);
+PropertyValue<NVS_KEY_CLR_DISC, uint32_t, NvsConfigManager> NvsConfigManager::colorDisconnected(DEFAULT_CLR_DISCONNECTED, I18N_COLOR_DISCONNECTED);
 
 // Phase 2: Heartbeat & battery rotation
-PropertyValue<NVS_KEY_HB_INT,   uint32_t, NvsConfigManager> NvsConfigManager::heartbeatInterval_s(DEFAULT_HB_INTERVAL_S, "Heartbeat Interval (s)");
-PropertyValue<NVS_KEY_HB_STALE, uint32_t, NvsConfigManager> NvsConfigManager::heartbeatStaleMultiplier(DEFAULT_HB_STALE_MULT, "Heartbeat Stale Multiplier");
-PropertyValue<NVS_KEY_REEL_CD,  uint16_t, NvsConfigManager> NvsConfigManager::reelectionCooldown_s(DEFAULT_REELECT_COOLDOWN_S, "Re-election Cooldown (s)");
-PropertyValue<NVS_KEY_BAT_HYST, uint16_t, NvsConfigManager> NvsConfigManager::batteryHysteresis_mv(DEFAULT_BATTERY_HYST_MV, "Battery Hysteresis (mV)");
+PropertyValue<NVS_KEY_HB_INT,   uint32_t, NvsConfigManager> NvsConfigManager::heartbeatInterval_s(DEFAULT_HB_INTERVAL_S, I18N_HEARTBEAT_INTERVAL);
+PropertyValue<NVS_KEY_HB_STALE, uint32_t, NvsConfigManager> NvsConfigManager::heartbeatStaleMultiplier(DEFAULT_HB_STALE_MULT, I18N_HEARTBEAT_STALE);
+PropertyValue<NVS_KEY_REEL_CD,  uint16_t, NvsConfigManager> NvsConfigManager::reelectionCooldown_s(DEFAULT_REELECT_COOLDOWN_S, I18N_REELECTION_COOLDOWN);
+PropertyValue<NVS_KEY_BAT_HYST, uint16_t, NvsConfigManager> NvsConfigManager::batteryHysteresis_mv(DEFAULT_BATTERY_HYST_MV, I18N_BATTERY_HYSTERESIS);
 
 // Phase 2: FTM
-PropertyValue<NVS_KEY_FTM_ANCH,  uint32_t, NvsConfigManager> NvsConfigManager::ftmNewNodeAnchors(DEFAULT_FTM_NEW_ANCHORS, "FTM New-Node Anchors");
-PropertyValue<NVS_KEY_FTM_SAMP,  uint32_t, NvsConfigManager> NvsConfigManager::ftmSamplesPerPair(DEFAULT_FTM_SAMPLES, "FTM Samples/Pair");
-PropertyValue<NVS_KEY_FTM_TMO,   uint32_t, NvsConfigManager> NvsConfigManager::ftmPairTimeout_ms(DEFAULT_FTM_PAIR_TMO_MS, "FTM Pair Timeout (ms)");
-PropertyValue<NVS_KEY_FTM_KPN,   float,    NvsConfigManager> NvsConfigManager::ftmKalmanProcessNoise(DEFAULT_FTM_KALMAN_PN, "FTM Kalman Process Noise");
-PropertyValue<NVS_KEY_FTM_OFS,   uint32_t, NvsConfigManager> NvsConfigManager::ftmResponderOffset_cm(DEFAULT_FTM_RESP_OFS_CM, "FTM Responder Offset (cm)");
+PropertyValue<NVS_KEY_FTM_ANCH,  uint32_t, NvsConfigManager> NvsConfigManager::ftmNewNodeAnchors(DEFAULT_FTM_NEW_ANCHORS, I18N_FTM_ANCHORS);
+PropertyValue<NVS_KEY_FTM_SAMP,  uint32_t, NvsConfigManager> NvsConfigManager::ftmSamplesPerPair(DEFAULT_FTM_SAMPLES, I18N_FTM_SAMPLES);
+PropertyValue<NVS_KEY_FTM_TMO,   uint32_t, NvsConfigManager> NvsConfigManager::ftmPairTimeout_ms(DEFAULT_FTM_PAIR_TMO_MS, I18N_FTM_TIMEOUT);
+PropertyValue<NVS_KEY_FTM_KPN,   float,    NvsConfigManager> NvsConfigManager::ftmKalmanProcessNoise(DEFAULT_FTM_KALMAN_PN, I18N_FTM_KALMAN_NOISE);
+PropertyValue<NVS_KEY_FTM_OFS,   uint32_t, NvsConfigManager> NvsConfigManager::ftmResponderOffset_cm(DEFAULT_FTM_RESP_OFS_CM, I18N_FTM_OFFSET);
 
 // Phase 5: Web UI
-PropertyValue<NVS_KEY_WEB_EN, bool, NvsConfigManager> NvsConfigManager::webEnabled(DEFAULT_WEB_ENABLED, "Web UI Enabled");
+PropertyValue<NVS_KEY_WEB_EN, bool, NvsConfigManager> NvsConfigManager::webEnabled(DEFAULT_WEB_ENABLED, I18N_WEB_ENABLED);
 
 // Fast-path boot
 PropertyValue<NVS_KEY_FAST_SCAN, uint16_t, NvsConfigManager>
-    NvsConfigManager::fastScanDelay_s{DEFAULT_FAST_SCAN, "Fast-Scan Delay (s)"};
+    NvsConfigManager::fastScanDelay_s{DEFAULT_FAST_SCAN, I18N_FAST_SCAN_DELAY};
 
 // Delegate
 PropertyValue<NVS_KEY_DLG_TMO, uint16_t, NvsConfigManager>
-    NvsConfigManager::delegateTimeout_s{DEFAULT_DELEGATE_TMO, "Delegate Timeout (s)"};
+    NvsConfigManager::delegateTimeout_s{DEFAULT_DELEGATE_TMO, I18N_DELEGATE_TIMEOUT};
 
 // RSSI re-evaluation
 PropertyValue<NVS_KEY_RSSI_DK, uint16_t, NvsConfigManager>
-    NvsConfigManager::rssiDecayK{DEFAULT_RSSI_DEC_K, "RSSI Decay K"};
+    NvsConfigManager::rssiDecayK{DEFAULT_RSSI_DEC_K, I18N_RSSI_DECAY_K};
 
 // Battery in tenure
 PropertyValue<NVS_KEY_BAT_TEN, bool, NvsConfigManager>
-    NvsConfigManager::batteryInTenure{DEFAULT_BAT_TENURE, "Battery in Tenure"};
+    NvsConfigManager::batteryInTenure{DEFAULT_BAT_TENURE, I18N_BATTERY_IN_TENURE};
+
+// Election
+PropertyValue<NVS_KEY_EL_SLOT, uint16_t, NvsConfigManager>
+    NvsConfigManager::electionSlot_ms{DEFAULT_ELECT_SLOT_MS, I18N_ELECTION_SLOT};
+PropertyValue<NVS_KEY_EL_ANN, uint16_t, NvsConfigManager>
+    NvsConfigManager::electionAnnounce_ms{DEFAULT_ELECT_ANN_MS, I18N_ELECTION_ANNOUNCE};
 
 // Phase 4: Orchestrator
-PropertyValue<NVS_KEY_ORCH_MODE, uint32_t, NvsConfigManager> NvsConfigManager::orchMode(DEFAULT_ORCH_MODE, "Orchestrator Mode");
-PropertyValue<NVS_KEY_ORCH_TRVD, uint32_t, NvsConfigManager> NvsConfigManager::orchTravelDelay_ms(DEFAULT_ORCH_TRAVEL_DELAY, "Travel Delay (ms)");
-PropertyValue<NVS_KEY_ORCH_RMIN, uint32_t, NvsConfigManager> NvsConfigManager::orchRandomMin_ms(DEFAULT_ORCH_RANDOM_MIN, "Random Min (ms)");
-PropertyValue<NVS_KEY_ORCH_RMAX, uint32_t, NvsConfigManager> NvsConfigManager::orchRandomMax_ms(DEFAULT_ORCH_RANDOM_MAX, "Random Max (ms)");
-PropertyValue<NVS_KEY_ORCH_TONE, uint32_t, NvsConfigManager> NvsConfigManager::orchToneIndex(DEFAULT_ORCH_TONE_INDEX, "Orchestrator Tone Index");
-PropertyValue<NVS_KEY_CSYNC_INT, uint32_t, NvsConfigManager> NvsConfigManager::clockSyncInterval_s(DEFAULT_CSYNC_INTERVAL_S, "Clock Sync Interval (s)");
+PropertyValue<NVS_KEY_ORCH_MODE, uint32_t, NvsConfigManager> NvsConfigManager::orchMode(DEFAULT_ORCH_MODE, I18N_ORCH_MODE);
+PropertyValue<NVS_KEY_ORCH_TRVD, uint32_t, NvsConfigManager> NvsConfigManager::orchTravelDelay_ms(DEFAULT_ORCH_TRAVEL_DELAY, I18N_ORCH_TRAVEL_DELAY);
+PropertyValue<NVS_KEY_ORCH_RMIN, uint32_t, NvsConfigManager> NvsConfigManager::orchRandomMin_ms(DEFAULT_ORCH_RANDOM_MIN, I18N_ORCH_RANDOM_MIN);
+PropertyValue<NVS_KEY_ORCH_RMAX, uint32_t, NvsConfigManager> NvsConfigManager::orchRandomMax_ms(DEFAULT_ORCH_RANDOM_MAX, I18N_ORCH_RANDOM_MAX);
+PropertyValue<NVS_KEY_ORCH_TONE, uint32_t, NvsConfigManager> NvsConfigManager::orchToneIndex(DEFAULT_ORCH_TONE_INDEX, I18N_ORCH_TONE_INDEX);
+PropertyValue<NVS_KEY_CSYNC_INT, uint32_t, NvsConfigManager> NvsConfigManager::clockSyncInterval_s(DEFAULT_CSYNC_INTERVAL_S, I18N_CLOCK_SYNC_INTERVAL);
 
 // NVS read helpers
 
@@ -203,6 +209,10 @@ void NvsConfigManager::reloadFromNvs()
     rssiDecayK.loadInitial(nvsGetU16(NVS_KEY_RSSI_DK, DEFAULT_RSSI_DEC_K));
     batteryInTenure.loadInitial(nvsGetBool(NVS_KEY_BAT_TEN, DEFAULT_BAT_TENURE));
 
+    // Election
+    electionSlot_ms.loadInitial(nvsGetU16(NVS_KEY_EL_SLOT, DEFAULT_ELECT_SLOT_MS));
+    electionAnnounce_ms.loadInitial(nvsGetU16(NVS_KEY_EL_ANN, DEFAULT_ELECT_ANN_MS));
+
     ESP_LOGI(TAG, "Config loaded from NVS");
 }
 
@@ -248,6 +258,10 @@ bool NvsConfigManager::restoreFactoryDefault(uint32_t safeKey)
     delegateTimeout_s     = DEFAULT_DELEGATE_TMO;
     rssiDecayK            = (uint16_t)DEFAULT_RSSI_DEC_K;
     batteryInTenure       = DEFAULT_BAT_TENURE;
+
+    // Election
+    electionSlot_ms       = DEFAULT_ELECT_SLOT_MS;
+    electionAnnounce_ms   = DEFAULT_ELECT_ANN_MS;
 
     return true;
 }
