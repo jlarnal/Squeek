@@ -5,6 +5,7 @@
 #include "sq_log.h"
 #include <Arduino.h>
 #include <esp_wifi.h>
+#include <esp_mesh.h>
 #include <esp_event.h>
 #include <esp_mac.h>
 #include <string.h>
@@ -214,12 +215,10 @@ void FtmManager::onFtmGo(const uint8_t* target_ap_mac, uint8_t samples) {
         target_ap_mac[0], target_ap_mac[1], target_ap_mac[2],
         target_ap_mac[3], target_ap_mac[4], target_ap_mac[5]);
 
-    // Query actual operating channel (mesh may have migrated from MESH_CHANNEL)
-    uint8_t ftm_channel = MESH_CHANNEL;
-    wifi_second_chan_t secondary;
-    if (esp_wifi_get_channel(&ftm_channel, &secondary) != ESP_OK || ftm_channel == 0) {
-        ftm_channel = MESH_CHANNEL;
-    }
+    // Use mesh config channel — esp_wifi_get_channel() is unreliable on root
+    mesh_cfg_t mcfg;
+    esp_mesh_get_config(&mcfg);
+    uint8_t ftm_channel = mcfg.channel ? mcfg.channel : MESH_CHANNEL;
 
     float dist = initiateSession(target_ap_mac, ftm_channel, samples);
 

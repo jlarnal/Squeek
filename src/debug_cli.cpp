@@ -180,80 +180,32 @@ static void cmd_wifi(const char* args) {
         }
         const char* pass = arg2[0] ? arg2 : "";
 
-        // Verify SSID is visible before saving — use esp_wifi_scan directly
-        // (Arduino WiFi.scanNetworks() crashes when ESP-MESH owns the netifs)
-        Serial.printf("Scanning for SSID \"%s\"...\n", arg1);
-        wifi_scan_config_t scanCfg = {};
-        scanCfg.show_hidden = false;
-        scanCfg.scan_type   = WIFI_SCAN_TYPE_ACTIVE;
-        scanCfg.scan_time.active.min = 120;
-        scanCfg.scan_time.active.max = 300;
-        esp_err_t scanErr = esp_wifi_scan_start(&scanCfg, true);
-        bool found = false;
-        int8_t bestRssi = -128;
-        uint8_t bestCh = 0;
-        if (scanErr == ESP_OK) {
-            uint16_t apCount = 0;
-            esp_wifi_scan_get_ap_num(&apCount);
-            uint16_t maxAps = (apCount > 30) ? 30 : apCount;
-            wifi_ap_record_t* aps = maxAps ? (wifi_ap_record_t*)malloc(maxAps * sizeof(wifi_ap_record_t)) : nullptr;
-            if (aps) {
-                esp_wifi_scan_get_ap_records(&maxAps, aps);
-                for (uint16_t i = 0; i < maxAps; i++) {
-                    if (strcmp((const char*)aps[i].ssid, arg1) == 0) {
-                        found = true;
-                        if (aps[i].rssi > bestRssi) {
-                            bestRssi = aps[i].rssi;
-                            bestCh = aps[i].primary;
-                        }
-                    }
-                }
-                free(aps);
+        if (!MeshConductor::isConnected()) {
+            // No mesh — save locally and let next boot try them
+            SqWebServer::saveWifiCreds(arg1, pass);
+            Serial.printf("WiFi credentials saved locally: SSID=%s\n", arg1);
+            Serial.println("Reboot to apply.");
+            return;
+        }
+
+        if (esp_mesh_is_root()) {
+            // Gateway: dispatch scan delegate to verify (creds NOT saved to NVS yet)
+            IMeshRole* r = MeshConductor::role();
+            if (r && r->roleId() == RoleId::GATEWAY) {
+                Serial.printf("Verifying \"%s\" via scan delegate...\n", arg1);
+                static_cast<Gateway*>(r)->startScanDelegate(arg1, pass);
             }
-            esp_wifi_clear_ap_list();
         } else {
-            Serial.printf("Scan failed: %s\n", esp_err_to_name(scanErr));
-        }
-
-        if (!found) {
-            Serial.printf("SSID \"%s\" not found in scan — credentials NOT saved.\n", arg1);
-            Serial.println("Check SSID spelling (case-sensitive) and router proximity.");
-            return;
-        }
-        Serial.printf("Found \"%s\" on ch%u (RSSI %d)\n", arg1, bestCh, bestRssi);
-
-        if (!SqWebServer::saveWifiCreds(arg1, pass)) {
-            Serial.println("Failed to save WiFi credentials");
-            return;
-        }
-        Serial.printf("WiFi credentials saved: SSID=%s\n", arg1);
-
-        // Propagate to the mesh
-        if (MeshConductor::isConnected()) {
-            WifiCredsMsg msg = {};
-            msg.type = MSG_TYPE_WIFI_CREDS;
+            // Peer: forward creds to gateway — it will handle delegation
+            Serial.println("Forwarding credentials to gateway...");
+            ScanDelegateMsg msg = {};
+            msg.type = MSG_TYPE_SCAN_DELEGATE;
             strncpy(msg.ssid, arg1, 32);
+            msg.ssid[32] = '\0';
             strncpy(msg.password, pass, 64);
-
-            if (esp_mesh_is_root()) {
-                // Gateway: broadcast to all peers, then reboot to apply router config
-                Serial.println("Broadcasting credentials to mesh...");
-                MeshConductor::broadcastToAll(&msg, sizeof(msg));
-                Serial.println("Rebooting in 2s to apply router config...");
-                TimerHandle_t t = xTimerCreate("cliReboot", pdMS_TO_TICKS(2000),
-                    pdFALSE, nullptr, [](TimerHandle_t timer) {
-                        xTimerDelete(timer, 0);
-                        esp_restart();
-                    });
-                if (t) xTimerStart(t, 0);
-            } else {
-                // Peer: forward to gateway — it will broadcast + reboot
-                Serial.println("Sending credentials to gateway...");
-                MeshConductor::sendToRoot(&msg, sizeof(msg));
-                Serial.println("Gateway will broadcast to mesh and reboot.");
-            }
-        } else {
-            Serial.println("Mesh not connected — saved locally only. Reboot to apply.");
+            msg.password[64] = '\0';
+            MeshConductor::sendToRoot(&msg, sizeof(msg));
+            Serial.println("Gateway will verify and propagate if valid.");
         }
     }
     else if (strcmp(sub, "clear") == 0) {
@@ -801,10 +753,10 @@ static void cmd_ftm(const char* args) {
                 peer->softap_mac[0], peer->softap_mac[1], peer->softap_mac[2],
                 peer->softap_mac[3], peer->softap_mac[4], peer->softap_mac[5]);
 
-            // Query actual operating channel (mesh may have migrated from MESH_CHANNEL)
-            uint8_t ftm_ch = MESH_CHANNEL;
-            wifi_second_chan_t sec;
-            if (esp_wifi_get_channel(&ftm_ch, &sec) != ESP_OK || ftm_ch == 0) ftm_ch = MESH_CHANNEL;
+            // Use mesh config channel — esp_wifi_get_channel() is unreliable on root
+            mesh_cfg_t mcfg;
+            esp_mesh_get_config(&mcfg);
+            uint8_t ftm_ch = mcfg.channel ? mcfg.channel : MESH_CHANNEL;
 
             float dist = FtmManager::initiateSession(peer->softap_mac, ftm_ch, (uint8_t)(uint32_t)NvsConfigManager::ftmSamplesPerPair);
             if (dist >= 0) {

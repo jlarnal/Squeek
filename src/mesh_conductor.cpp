@@ -55,6 +55,7 @@ static int8_t      s_bestRouterRssi = -128;     // best RSSI to a known router (
 // ESP-NOW election result (computed in init(), consumed in start())
 static ElectionResult s_electionResult = {};
 static bool           s_electionRan    = false;
+static bool           s_scanResultPending = false;
 static bool        s_hasRouterCreds = false;     // true when real WiFi creds loaded
 
 static void assignRoleFromMeshState();  // forward decl
@@ -174,6 +175,36 @@ static void updateRtcState() {
         memcpy(map->gateway_mac, own_mac, 6);
     }
 
+    RtcState::save();
+}
+
+// --- Scan delegate: send result to gateway after mesh join ---
+
+static void checkAndReportScanResult() {
+    if (!s_scanResultPending) return;
+    s_scanResultPending = false;
+
+    rtc_state_t* rtc = RtcState::get();
+    if (rtc->scan_result == 1) {
+        CredVerifiedMsg msg = {};
+        msg.type = MSG_TYPE_CRED_VERIFIED;
+        strncpy(msg.ssid, rtc->scan_ssid, 32);
+        msg.channel = rtc->scan_channel;
+        msg.rssi = rtc->scan_rssi;
+        SqLog.printf("[scan] Reporting CRED_VERIFIED: %s ch%u rssi=%d\n",
+                     msg.ssid, msg.channel, msg.rssi);
+        MeshConductor::sendToRoot(&msg, sizeof(msg));
+    } else {
+        CredRejectedMsg msg = {};
+        msg.type = MSG_TYPE_CRED_REJECTED;
+        strncpy(msg.ssid, rtc->scan_ssid, 32);
+        SqLog.printf("[scan] Reporting CRED_REJECTED: %s\n", msg.ssid);
+        MeshConductor::sendToRoot(&msg, sizeof(msg));
+    }
+
+    memset(rtc->scan_ssid, 0, sizeof(rtc->scan_ssid));
+    memset(rtc->scan_pass, 0, sizeof(rtc->scan_pass));
+    rtc->scan_result = 0;
     RtcState::save();
 }
 
@@ -417,30 +448,33 @@ static void meshRxTask(void* pvParameters) {
                     SqLog.printf("[mesh] WiFi credentials unchanged (SSID=%s)\n", wc->ssid);
                 }
 
-                if (esp_mesh_is_root()) {
-                    // Start web server if not running
-                    if (!SqWebServer::isRunning()) {
-                        SqLog.println("[mesh] Starting web server with new credentials");
-                        SqWebServer::start();
-                    }
-                    // Broadcast new/changed creds to all peers
-                    if (credsChanged) {
-                        SqLog.println("[mesh] Broadcasting WiFi credentials to all peers");
-                        MeshConductor::broadcastToAll(wc, sizeof(WifiCredsMsg));
-                    }
-
-                    // Creds are in NVS + broadcast to peers. Reboot to apply —
-                    // esp_mesh_set_config() is unreliable at runtime, and we can't
-                    // call esp_mesh_stop() from meshRxTask (kills our own stack).
-                    // Defer the reboot via timer so meshRxTask can exit cleanly.
-                    if (credsChanged) {
-                        SqLog.println("[mesh] Router creds saved — rebooting in 2s to apply");
-                        TimerHandle_t t = xTimerCreate("gwReboot", pdMS_TO_TICKS(2000),
-                            pdFALSE, nullptr, [](TimerHandle_t timer) {
-                                xTimerDelete(timer, 0);
-                                esp_restart();
-                            });
-                        if (t) xTimerStart(t, 0);
+                if (esp_mesh_is_root() && s_role && s_role->roleId() == RoleId::GATEWAY) {
+                    Gateway* gw = static_cast<Gateway*>(s_role);
+                    if (gw->hasDelegateTicket()) {
+                        // Delegate return — creds already verified. Broadcast + reboot.
+                        if (credsChanged) {
+                            SqLog.println("[mesh] Broadcasting WiFi credentials to all peers");
+                            MeshConductor::broadcastToAll(wc, sizeof(WifiCredsMsg));
+                        }
+                        gw->clearTicket();
+                        if (credsChanged) {
+                            // Warn peers to reboot with us
+                            RebootWarnMsg rw = {};
+                            rw.type = MSG_TYPE_REBOOT_WARN;
+                            rw.delay_ms = 2000;
+                            MeshConductor::broadcastToAll(&rw, sizeof(rw));
+                            SqLog.println("[mesh] Router creds saved — everyone rebooting in 2s");
+                            TimerHandle_t t = xTimerCreate("gwReboot", pdMS_TO_TICKS(2000),
+                                pdFALSE, nullptr, [](TimerHandle_t timer) {
+                                    xTimerDelete(timer, 0);
+                                    esp_restart();
+                                });
+                            if (t) xTimerStart(t, 0);
+                        }
+                    } else {
+                        // Fresh wifi set from a peer — dispatch scan delegate to verify
+                        SqLog.printf("[mesh] WiFi creds from peer — dispatching scan delegate for \"%s\"\n", wc->ssid);
+                        gw->startScanDelegate(wc->ssid, wc->password);
                     }
                 }
 
@@ -554,6 +588,101 @@ static void meshRxTask(void* pvParameters) {
                     Gateway* gw = static_cast<Gateway*>(s_role);
                     gw->onScanResult(sr->mac, sr->ssid_count);
                 }
+            }
+            // --- Scan delegate protocol ---
+            else if (msgType == MSG_TYPE_SCAN_DELEGATE && data.size >= sizeof(ScanDelegateMsg)) {
+                ScanDelegateMsg* sd = (ScanDelegateMsg*)rx_buf;
+                if (s_role && s_role->roleId() == RoleId::GATEWAY) {
+                    // Gateway received from peer's wifi set — dispatch scan delegate
+                    SqLog.printf("[mesh] Peer requests scan for \"%s\" — dispatching delegate\n", sd->ssid);
+                    static_cast<Gateway*>(s_role)->startScanDelegate(sd->ssid, sd->password);
+                } else {
+                    // Peer received from gateway — reboot as scan delegate
+                    SqLog.printf("[mesh] Designated as Scan Delegate for \"%s\" — rebooting\n", sd->ssid);
+                    rtc_state_t* rtc = RtcState::get();
+                    rtc->next_role = (uint8_t)RoleId::SCAN_DELEGATE;
+                    strncpy(rtc->scan_ssid, sd->ssid, 32);
+                    rtc->scan_ssid[32] = '\0';
+                    strncpy(rtc->scan_pass, sd->password, 64);
+                    rtc->scan_pass[64] = '\0';
+                    rtc->scan_result = 0;
+                    RtcState::save();
+                    vTaskDelay(pdMS_TO_TICKS(200));
+                    esp_restart();
+                }
+            }
+            else if (msgType == MSG_TYPE_CRED_VERIFIED && data.size >= sizeof(CredVerifiedMsg)) {
+                CredVerifiedMsg* cv = (CredVerifiedMsg*)rx_buf;
+                SqLog.printf("[mesh] CRED_VERIFIED: \"%s\" on ch%u (RSSI %d)\n",
+                             cv->ssid, cv->channel, cv->rssi);
+
+                // Retrieve password from RTC (not NVS — creds weren't committed yet)
+                rtc_state_t* rtc = RtcState::get();
+                char pass[65] = {};
+                // The gateway stored the password in scan_pass when dispatching
+                // (startScanDelegate wrote it to RTC for lone-gateway path).
+                // For multi-node, the password was in the ScanDelegateMsg we sent.
+                // We need to recover it — check RTC first, then CredentialTable fallback.
+                if (rtc->scan_pass[0] != '\0' && strcmp(rtc->scan_ssid, cv->ssid) == 0) {
+                    strncpy(pass, rtc->scan_pass, 64);
+                } else {
+                    // Fallback: check if creds happen to be in CredentialTable already
+                    for (uint8_t i = 0; i < CRED_TABLE_SLOTS; i++) {
+                        const CredEntry* e = CredentialTable::getSlot(i);
+                        if (e && strcmp(e->ssid, cv->ssid) == 0) {
+                            strncpy(pass, e->pass, 64);
+                            break;
+                        }
+                    }
+                }
+
+                // NOW commit verified creds to NVS
+                CredentialTable::add(cv->ssid, pass);
+                SqLog.printf("[mesh] Verified creds saved to NVS: SSID=%s\n", cv->ssid);
+
+                // Broadcast creds to all peers so they save to NVS
+                WifiCredsMsg wc = {};
+                wc.type = MSG_TYPE_WIFI_CREDS;
+                strncpy(wc.ssid, cv->ssid, 32);
+                strncpy(wc.password, pass, 64);
+                MeshConductor::broadcastToAll(&wc, sizeof(wc));
+
+                // Warn peers to reboot with us (fixed 2s delay)
+                RebootWarnMsg rw = {};
+                rw.type = MSG_TYPE_REBOOT_WARN;
+                rw.delay_ms = 2000;
+                MeshConductor::broadcastToAll(&rw, sizeof(rw));
+
+                // Clear RTC scan fields
+                memset(rtc->scan_ssid, 0, sizeof(rtc->scan_ssid));
+                memset(rtc->scan_pass, 0, sizeof(rtc->scan_pass));
+                rtc->scan_result = 0;
+                RtcState::save();
+
+                Serial.printf("Credentials verified! Everyone rebooting in 2s to connect to \"%s\" on ch%u...\n",
+                              cv->ssid, cv->channel);
+                TimerHandle_t t = xTimerCreate("credReboot", pdMS_TO_TICKS(2000),
+                    pdFALSE, nullptr, [](TimerHandle_t timer) {
+                        xTimerDelete(timer, 0);
+                        esp_restart();
+                    });
+                if (t) xTimerStart(t, 0);
+            }
+            else if (msgType == MSG_TYPE_CRED_REJECTED && data.size >= sizeof(CredRejectedMsg)) {
+                CredRejectedMsg* cr = (CredRejectedMsg*)rx_buf;
+                SqLog.printf("[mesh] CRED_REJECTED: \"%s\" not found by scan delegate\n", cr->ssid);
+                Serial.printf("WARNING: SSID \"%s\" not found in scan — credentials may be wrong.\n", cr->ssid);
+                Serial.println("Credentials remain stored. Use 'wifi clear' to remove, or retry.");
+            }
+            else if (msgType == MSG_TYPE_REBOOT_WARN && data.size >= sizeof(RebootWarnMsg)) {
+                RebootWarnMsg* rw = (RebootWarnMsg*)rx_buf;
+                SqLog.printf("[mesh] Gateway reboot warning — rebooting in %ums\n", rw->delay_ms);
+                TimerHandle_t t = xTimerCreate("peerReboot", pdMS_TO_TICKS(rw->delay_ms),
+                    pdFALSE, nullptr, [](TimerHandle_t timer) {
+                        xTimerDelete(timer, 0);
+                        esp_restart();
+                    });
+                if (t) xTimerStart(t, 0);
             }
             // --- Credential exchange protocol ---
             else if (msgType == MSG_TYPE_CRED_OFFER && data.size >= 2) {
@@ -716,6 +845,9 @@ static void meshEventHandler(void* arg, esp_event_base_t event_base,
         if (!s_roleAssigned) {
             assignRoleFromMeshState();
         }
+
+        // Scan delegate: report result now that we're connected
+        checkAndReportScanResult();
         break;
     }
 
@@ -869,7 +1001,60 @@ void MeshConductor::init() {
 
     // ESP-NOW election runs here — BEFORE esp_mesh_init() which takes over WiFi internals
     bool isDelegateReturn = RtcState::isValid() && RtcState::get()->delegate_active;
-    bool skipElection = isDelegateReturn || false;  // no pre-assigned role known at init time
+    // Scan delegate: scan_ssid is populated + scan_result==0 means scan hasn't run yet
+    bool isScanDelegate   = RtcState::isValid() &&
+                            RtcState::get()->scan_ssid[0] != '\0' &&
+                            RtcState::get()->scan_result == 0;
+    bool skipElection = isDelegateReturn || isScanDelegate;
+
+    // Scan delegate: run all-channel scan NOW while WiFi is free (pre-mesh)
+    if (isScanDelegate) {
+        rtc_state_t* rtc = RtcState::get();
+        SqLog.printf("[scan] Pre-mesh scan for \"%s\"...\n", rtc->scan_ssid);
+
+        wifi_scan_config_t scanCfg = {};
+        scanCfg.show_hidden = false;
+        scanCfg.scan_type   = WIFI_SCAN_TYPE_ACTIVE;
+        scanCfg.scan_time.active.min = 120;
+        scanCfg.scan_time.active.max = 300;
+        esp_err_t scanErr = esp_wifi_scan_start(&scanCfg, true);
+
+        rtc->scan_result  = 2;  // default: not found
+        rtc->scan_channel = 0;
+        rtc->scan_rssi    = -128;
+
+        if (scanErr == ESP_OK) {
+            uint16_t apCount = 0;
+            esp_wifi_scan_get_ap_num(&apCount);
+            uint16_t maxAps = (apCount > 30) ? 30 : apCount;
+            wifi_ap_record_t* aps = maxAps ? (wifi_ap_record_t*)malloc(maxAps * sizeof(wifi_ap_record_t)) : nullptr;
+            if (aps) {
+                esp_wifi_scan_get_ap_records(&maxAps, aps);
+                for (uint16_t i = 0; i < maxAps; i++) {
+                    if (strcmp((const char*)aps[i].ssid, rtc->scan_ssid) == 0) {
+                        if (aps[i].rssi > rtc->scan_rssi) {
+                            rtc->scan_result  = 1;
+                            rtc->scan_channel = aps[i].primary;
+                            rtc->scan_rssi    = aps[i].rssi;
+                        }
+                    }
+                }
+                free(aps);
+            }
+            esp_wifi_clear_ap_list();
+        } else {
+            SqLog.printf("[scan] Scan failed: %s\n", esp_err_to_name(scanErr));
+        }
+
+        if (rtc->scan_result == 1) {
+            SqLog.printf("[scan] FOUND \"%s\" on ch%u (RSSI %d)\n",
+                         rtc->scan_ssid, rtc->scan_channel, rtc->scan_rssi);
+        } else {
+            SqLog.printf("[scan] NOT FOUND \"%s\"\n", rtc->scan_ssid);
+        }
+        RtcState::save();
+    }
+
     // Note: s_role may be set later by boot path; start() handles that case
     if (!skipElection) {
         // Load creds early to set s_hasRouterCreds for election context
@@ -943,10 +1128,11 @@ void MeshConductor::start() {
 
     // Channel: election result if available, otherwise legacy fallback
     bool isDelegateReturn = RtcState::isValid() && RtcState::get()->delegate_active;
+    bool isScanDelegateReturn = RtcState::isValid() && RtcState::get()->scan_result != 0;
     if (s_electionRan && election.candidate_count > 0) {
         cfg.channel = election.target_channel;
         SqLog.printf("[mesh] Channel from election: %u\n", cfg.channel);
-    } else if (isDelegateReturn) {
+    } else if (isDelegateReturn || isScanDelegateReturn) {
         cfg.channel = 0;  // scan all for existing mesh
     } else if (s_hasRouterCreds) {
         cfg.channel = 0;  // scan for router
@@ -994,6 +1180,49 @@ void MeshConductor::start() {
     if (s_electionRan && election.i_am_winner) {
         if (!s_roleAssigned) {
             assignRoleFromMeshState();
+        }
+    }
+
+    // Check if we booted as scan delegate and need to report results
+    if (RtcState::isValid() && RtcState::get()->scan_result != 0) {
+        s_scanResultPending = true;
+    }
+
+    // Scan delegate self-scan: if we became gateway, handle result locally
+    if (s_scanResultPending && s_role && s_role->roleId() == RoleId::GATEWAY) {
+        s_scanResultPending = false;
+        rtc_state_t* rtc = RtcState::get();
+        if (rtc->scan_result == 1) {
+            SqLog.printf("[scan] Self-scan verified: %s ch%u — broadcasting and rebooting\n",
+                         rtc->scan_ssid, rtc->scan_channel);
+            // Commit verified creds to NVS
+            CredentialTable::add(rtc->scan_ssid, rtc->scan_pass);
+            // Broadcast creds + reboot warning to peers
+            WifiCredsMsg wc = {};
+            wc.type = MSG_TYPE_WIFI_CREDS;
+            strncpy(wc.ssid, rtc->scan_ssid, 32);
+            strncpy(wc.password, rtc->scan_pass, 64);
+            MeshConductor::broadcastToAll(&wc, sizeof(wc));
+            RebootWarnMsg rw = {};
+            rw.type = MSG_TYPE_REBOOT_WARN;
+            rw.delay_ms = 2000;
+            MeshConductor::broadcastToAll(&rw, sizeof(rw));
+            memset(rtc->scan_ssid, 0, sizeof(rtc->scan_ssid));
+            memset(rtc->scan_pass, 0, sizeof(rtc->scan_pass));
+            rtc->scan_result = 0;
+            RtcState::save();
+            TimerHandle_t t = xTimerCreate("scanReboot", pdMS_TO_TICKS(2000),
+                pdFALSE, nullptr, [](TimerHandle_t timer) {
+                    xTimerDelete(timer, 0);
+                    esp_restart();
+                });
+            if (t) xTimerStart(t, 0);
+        } else {
+            SqLog.printf("[scan] Self-scan: \"%s\" not found\n", rtc->scan_ssid);
+            memset(rtc->scan_ssid, 0, sizeof(rtc->scan_ssid));
+            memset(rtc->scan_pass, 0, sizeof(rtc->scan_pass));
+            rtc->scan_result = 0;
+            RtcState::save();
         }
     }
 }
@@ -1067,14 +1296,16 @@ void MeshConductor::printStatus() {
     Serial.printf("Role assigned: %s\n", s_roleAssigned ? "yes" : "no");
     const char* roleName = !s_role ? "none"
         : s_role->roleId() == RoleId::GATEWAY ? "GATEWAY"
-        : s_role->roleId() == RoleId::DELEGATE ? "DELEGATE" : "NODE";
+        : s_role->roleId() == RoleId::DELEGATE ? "DELEGATE"
+        : s_role->roleId() == RoleId::SCAN_DELEGATE ? "SCAN_DELEGATE" : "NODE";
     Serial.printf("Role: %s\n", roleName);
     Serial.printf("Layer: %d\n", esp_mesh_get_layer());
     {
-        uint8_t primary = 0;
-        wifi_second_chan_t secondary;
-        esp_wifi_get_channel(&primary, &secondary);
-        Serial.printf("Channel: %u\n", primary);
+        // esp_wifi_get_channel() returns garbage on root (STA not associated).
+        // Use the mesh config channel instead — reliable for all roles.
+        mesh_cfg_t meshCfg;
+        esp_mesh_get_config(&meshCfg);
+        Serial.printf("Channel: %u\n", meshCfg.channel);
     }
     Serial.printf("Tenure score: %u (rssi=%d)\n",
         computeTenureScore(s_bestRouterRssi), s_bestRouterRssi);

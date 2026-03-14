@@ -312,22 +312,26 @@ LOW_BATTERY → DEEP_SLEEP (timer-only wake for periodic check)
 - [x] Step-down suppression while delegate ticket is active; ticket transfer via `MSG_TYPE_DELEGATE_TICKET` / `MSG_TYPE_DELEGATE_TICKET_ACK` on gateway handoff
 - [x] MAC-jittered backoff on gateway loss (5–15s), delegate reboot race fix
 - [x] `cfg.channel = 1` for routerless bootstrap (fixed channel so all credless nodes converge); `cfg.channel = 0` for credentialed nodes and delegate return (scan all channels)
-- [x] Fast-path boot from RTC state (GATEWAY/PEER/DELEGATE roles)
+- [x] Fast-path boot from RTC state (GATEWAY/PEER/DELEGATE/SCAN_DELEGATE roles)
 - [x] `MSG_TYPE_SETUP_DELEGATE` / `MSG_TYPE_DELEGATE_RESULT` / `MSG_TYPE_MERGE_CHECK`
 - [x] WiFi scan filters out other `Squeek_Config_*` SSIDs
 - [x] LED blinks 4x faster when a client connects to the delegate SoftAP
-- [x] `CredentialTable` — 8-slot multi-credential NVS storage (`c0s`..`c7s`/`c0p`..`c7p`), scan matching, mesh serialization. Legacy `wifiSsid`/`wifiPass` migrated to slot 0 on first boot
+- [x] `CredentialTable` — 10-slot multi-credential NVS storage (`c0s`..`c9s`/`c0p`..`c9p`), scan matching, mesh serialization. Legacy `wifiSsid`/`wifiPass` migrated to slot 0 on first boot. `clear()` wipes all slots + legacy keys
 - [x] Credential exchange protocol: `MSG_TYPE_CRED_OFFER` (gateway → peer on join) + `MSG_TYPE_CRED_REPLY` (peer → gateway with merged creds + tenure score)
 - [x] RSSI-aware tenure score — RAM-only computed fitness: `128 + RSSI_component(0..80) + battery(0..100) + uptime(0..50)`. Replaces blind NVS-persisted `s_gwTenure` counter
 - [x] HeartbeatMsg extended with `router_rssi` (int8_t) + `tenure_score` (uint16_t) for periodic re-evaluation
 - [x] Periodic gateway re-evaluation every `N*(1+k)` heartbeat ticks (`rssiDk` NVS param, Q4.4 fixed-point, default 0.5); gateway waives root if peer tenure exceeds its own
 
-**Phase 5C — Dashboard (not started):**
-- REST API: node list, position map, sound library, trigger play, upload samples
-- Visual 3D topology map showing node positions (from FTM data)
-- Sequence designer: build play patterns visually
-- Schedule configuration
-- Battery levels per node
+**Phase 5C — Dashboard (in progress):**
+- [x] REST API: node list (`/api/peers`), position map (`/api/distances`), sound library (`/api/tones`), trigger play (`/api/orch`), config (`/api/config`), FTM sweep (`/api/sweep`), reboot (`/api/reboot`)
+- [x] Visual 3D topology map showing node positions (canvas + perspective projection + touch controls)
+- [x] Sequence designer: visual step builder with play/save/load/clear
+- [x] Battery levels per node
+- [x] WebSocket real-time updates (peer join/leave, orch state)
+- [x] i18n (EN/FR/ES/DE)
+- [ ] Upload and manage sound samples
+- [ ] Schedule configuration UI
+- [ ] Scan Delegate — `wifi set` triggers peer-delegated all-channel scan for credential verification (`RoleId::SCAN_DELEGATE`, `MSG_TYPE_SCAN_DELEGATE` / `MSG_TYPE_CRED_VERIFIED` / `MSG_TYPE_CRED_REJECTED`)
 - **Deliverable:** Connect phone to same WiFi as gateway, open browser at gateway IP, see the map, trigger a chase.
 
 ### Phase 6 — Stealth & Polish
@@ -695,6 +699,49 @@ If the old gateway crashes before transferring, the delegate eventually times ou
 
 > **Lone gateway:** If the gateway has no peers, the BOOT button press triggers self-delegation (sets `next_role = DELEGATE` in RTC and reboots).
 
+#### Scenario 7 — Scan Delegate (CLI-triggered credential verification)
+
+When a user enters `wifi set <SSID> <password>` on any node, the credentials must be verified by an all-channel WiFi scan before being applied. The ESP32-C6 has a single radio, so the mesh root cannot scan while maintaining the mesh. A peer is delegated to perform the verification scan.
+
+**Why not scan on the gateway?** ESP-MESH locks the radio to the mesh operating channel (typically ch1 for routerless). `esp_wifi_scan_start()` returns `ESP_FAIL` on a running mesh root. Even if it succeeded, scanning would tear down the AP beacons and disconnect all children.
+
+**RoleId:** `RoleId::SCAN_DELEGATE = 3` — a new role alongside PEER(0), GATEWAY(1), DELEGATE(2).
+
+**RTC fields:** `next_role = SCAN_DELEGATE`, plus `scan_ssid[33]` and `scan_pass[65]` in `rtc_state_t` to carry the credentials across reboot.
+
+**Trigger — `wifi set` CLI command:**
+- **On gateway:** Save creds to `CredentialTable`. If peers exist, pick one and send `MSG_TYPE_SCAN_DELEGATE` (SSID + password). If no peers (lone gateway), write creds + `next_role = SCAN_DELEGATE` to RTC, reboot self.
+- **On peer:** Forward creds to gateway via `sendToRoot()`. Gateway handles delegation as above.
+
+**Scan Delegate boot flow:**
+1. Node boots, sees `next_role == SCAN_DELEGATE` in RTC
+2. Clears `next_role` (consumed on use)
+3. Reads `scan_ssid` / `scan_pass` from RTC
+4. Initializes WiFi STA, runs full all-channel `esp_wifi_scan_start()` (blocking)
+5. Searches scan results for matching SSID (case-sensitive `strcmp`)
+6. Stores result in RTC: `scan_result` (0 = not found, 1 = found), `scan_channel`, `scan_rssi`
+7. Joins mesh normally (`cfg.channel = 0`, scan all) — no extra reboot
+8. Once mesh-connected, sends result to gateway:
+   - **Found:** `MSG_TYPE_CRED_VERIFIED` { ssid, channel, rssi } — gateway broadcasts creds to all peers, then everyone reboots onto the verified channel
+   - **Not found:** `MSG_TYPE_CRED_REJECTED` { ssid } — gateway logs warning, optionally removes creds from `CredentialTable`
+
+**`MSG_TYPE_SCAN_DELEGATE` (gateway → peer):**
+Format: `| type(1B) | ssid_len(1B) | ssid(32B) | pass_len(1B) | pass(64B) |`
+Peer receives this, writes creds + `next_role = SCAN_DELEGATE` to RTC, reboots.
+
+**`MSG_TYPE_CRED_VERIFIED` (scan delegate → gateway):**
+Format: `| type(1B) | ssid_len(1B) | ssid(32B) | channel(1B) | rssi(1B signed) |`
+Gateway saves channel, broadcasts creds to all peers, reboots after 2s delay.
+
+**`MSG_TYPE_CRED_REJECTED` (scan delegate → gateway):**
+Format: `| type(1B) | ssid_len(1B) | ssid(32B) |`
+Gateway prints warning. Credentials remain in `CredentialTable` (user may retry or clear).
+
+**Lone gateway self-scan flow:**
+1. `wifi set` with no peers → write creds + `SCAN_DELEGATE` to RTC, reboot
+2. Boot → scan → if found, reboot again into normal mesh with router config on verified channel
+3. If not found, boot into routerless mesh, print warning
+
 #### Credential Exchange Protocol
 
 Triggered automatically when a new peer joins the gateway's mesh (`Gateway::onPeerJoined()`). This ensures all nodes share WiFi knowledge and enables RSSI-aware gateway selection.
@@ -709,17 +756,17 @@ Peer imports the gateway's credentials into its own `CredentialTable` (deduplica
 - Imports any unknown credentials from peer into `CredentialTable`.
 - Compares peer's tenure score against its own. If peer's tenure > gateway's tenure → `esp_mesh_waive_root()`.
 
-**Message size budget:** 8 creds × (1+32+1+64) = 784 bytes + headers. Fits in one ESP-MESH frame (MTU = 1472 bytes).
+**Message size budget:** 10 creds × (1+32+1+64) = 980 bytes + headers. Fits in one ESP-MESH frame (MTU = 1472 bytes).
 
 #### CredentialTable
 
-Static class providing multi-credential NVS storage with 8 slots. Files: `credential_table.h` / `credential_table.cpp`.
+Static class providing multi-credential NVS storage with 10 slots. Files: `credential_table.h` / `credential_table.cpp`.
 
-**NVS keys:** `c0s`/`c0p` through `c7s`/`c7p` (SSID/password per slot).
+**NVS keys:** `c0s`/`c0p` through `c9s`/`c9p` (SSID/password per slot).
 
 **Legacy migration:** On first boot, if slot 0 is empty, migrates `wifiSsid`/`wifiPass` keys to slot 0. `SqWebServer::loadWifiCreds()`/`saveWifiCreds()`/`hasWifiCreds()` delegate to `CredentialTable` for backward compatibility.
 
-**API:** `init()`, `add(ssid, pass)`, `get(slot, ...)`, `count()`, `hasAny()`, `matchScan(records, count)` → `{slot, rssi, ssid}`, `toBuffer()`/`fromBuffer()` for mesh serialization.
+**API:** `init()`, `add(ssid, pass)`, `get(slot, ...)`, `count()`, `hasAny()`, `clear()`, `matchScan(records, count)` → `{slot, rssi, ssid}`, `toBuffer()`/`fromBuffer()` for mesh serialization, `getSlot(slot)` for direct read-only access.
 
 ### 7.3 LedDriver
 

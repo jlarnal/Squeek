@@ -34,6 +34,11 @@ enum MeshMsgType : uint8_t {
     // Credential exchange
     MSG_TYPE_CRED_OFFER  = 0x90,  // gateway → peer: all known credentials
     MSG_TYPE_CRED_REPLY  = 0x91,  // peer → gateway: merged creds + tenure score
+    // Scan delegate (credential verification)
+    MSG_TYPE_SCAN_DELEGATE  = 0xA0,  // gateway → peer: go scan for this SSID
+    MSG_TYPE_CRED_VERIFIED  = 0xA1,  // scan delegate → gateway: SSID found
+    MSG_TYPE_CRED_REJECTED  = 0xA2,  // scan delegate → gateway: SSID not found
+    MSG_TYPE_REBOOT_WARN    = 0xA3,  // gateway → all: I'm rebooting, you should too
 };
 
 // --- Heartbeat message (peer → gateway) ---
@@ -186,12 +191,37 @@ struct __attribute__((packed)) CredReplyMsg {
     // followed by count × CredReplyEntry (from credential_table.h)
 };
 
+// --- Scan Delegate messages ---
+
+struct __attribute__((packed)) ScanDelegateMsg {
+    uint8_t type;           // MSG_TYPE_SCAN_DELEGATE
+    char    ssid[33];       // null-terminated SSID to verify
+    char    password[65];   // null-terminated password
+};
+
+struct __attribute__((packed)) CredVerifiedMsg {
+    uint8_t type;           // MSG_TYPE_CRED_VERIFIED
+    char    ssid[33];       // verified SSID
+    uint8_t channel;        // channel the router was found on
+    int8_t  rssi;           // signal strength
+};
+
+struct __attribute__((packed)) CredRejectedMsg {
+    uint8_t type;           // MSG_TYPE_CRED_REJECTED
+    char    ssid[33];       // SSID that was not found
+};
+
+struct __attribute__((packed)) RebootWarnMsg {
+    uint8_t type;           // MSG_TYPE_REBOOT_WARN
+    uint16_t delay_ms;      // how long peers should wait before rebooting
+};
+
 // --- Tenure score computation (RAM-only, never persisted) ---
 uint16_t computeTenureScore(int8_t best_rssi_dBm);
 
 // --- Role identifier ---
 
-enum class RoleId : uint8_t { PEER = 0, GATEWAY = 1, DELEGATE = 2 };
+enum class RoleId : uint8_t { PEER = 0, GATEWAY = 1, DELEGATE = 2, SCAN_DELEGATE = 3 };
 
 // --- IMeshRole abstract interface ---
 
@@ -217,6 +247,7 @@ public:
     RoleId roleId() const override { return RoleId::GATEWAY; }
     void printStatus() override;
     void startDelegation();           // button-triggered: scan contest or self-delegate
+    void startScanDelegate(const char* ssid, const char* pass);  // pick peer to verify creds
     void onScanResult(const uint8_t* mac, uint8_t ssid_count);
     void trackPeerTenure(uint16_t tenure);  // track best peer tenure from heartbeats
     bool hasDelegateTicket() const;   // true if a delegate is out (remaining_s > 0)

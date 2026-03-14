@@ -390,3 +390,62 @@ void Gateway::clearTicket() {
     rtc->ticket_remaining_s = 0;
     RtcState::save();
 }
+
+void Gateway::startScanDelegate(const char* ssid, const char* pass) {
+    int meshNodes = esp_mesh_get_total_node_num();
+    if (meshNodes <= 1) {
+        // Lone gateway — self-scan
+        SqLog.println("[gateway] No peers — self-scan-delegating");
+        rtc_state_t* rtc = RtcState::get();
+        rtc->next_role = (uint8_t)RoleId::SCAN_DELEGATE;
+        strncpy(rtc->scan_ssid, ssid, 32);
+        rtc->scan_ssid[32] = '\0';
+        strncpy(rtc->scan_pass, pass, 64);
+        rtc->scan_pass[64] = '\0';
+        rtc->scan_result = 0;
+        RtcState::save();
+        vTaskDelay(pdMS_TO_TICKS(200));
+        esp_restart();
+        return;
+    }
+
+    // Stash creds in RTC so CRED_VERIFIED handler can recover the password
+    rtc_state_t* rtc = RtcState::get();
+    strncpy(rtc->scan_ssid, ssid, 32);
+    rtc->scan_ssid[32] = '\0';
+    strncpy(rtc->scan_pass, pass, 64);
+    rtc->scan_pass[64] = '\0';
+    rtc->scan_result = 0;
+    RtcState::save();
+
+    // Pick first available peer from routing table
+    mesh_addr_t routing_table[MESH_MAX_NODES];
+    int table_size = 0;
+    esp_mesh_get_routing_table(routing_table, sizeof(routing_table), &table_size);
+
+    uint8_t ownMac[6];
+    esp_read_mac(ownMac, ESP_MAC_WIFI_STA);
+
+    for (int i = 0; i < table_size; i++) {
+        if (memcmp(routing_table[i].addr, ownMac, 6) != 0) {
+            ScanDelegateMsg msg = {};
+            msg.type = MSG_TYPE_SCAN_DELEGATE;
+            strncpy(msg.ssid, ssid, 32);
+            msg.ssid[32] = '\0';
+            strncpy(msg.password, pass, 64);
+            msg.password[64] = '\0';
+            MeshConductor::sendToNode(routing_table[i].addr, &msg, sizeof(msg));
+            SqLog.printf("[gateway] Scan delegate dispatched to %02X:%02X:%02X:%02X:%02X:%02X for \"%s\"\n",
+                routing_table[i].addr[0], routing_table[i].addr[1], routing_table[i].addr[2],
+                routing_table[i].addr[3], routing_table[i].addr[4], routing_table[i].addr[5], ssid);
+            return;
+        }
+    }
+
+    // Fallback: no reachable peers — self-scan (rtc already populated above)
+    SqLog.println("[gateway] No peers in routing table — self-scan-delegating");
+    rtc->next_role = (uint8_t)RoleId::SCAN_DELEGATE;
+    RtcState::save();
+    vTaskDelay(pdMS_TO_TICKS(200));
+    esp_restart();
+}

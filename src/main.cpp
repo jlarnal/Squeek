@@ -51,6 +51,11 @@ void setup()
         SqLog.println("[boot] RTC says PEER — scanning for mesh");
         MeshConductor::init();
         MeshConductor::start();
+    } else if (nextRole == (uint8_t)RoleId::SCAN_DELEGATE) {
+        SqLog.println("[boot] RTC says SCAN_DELEGATE — verifying credentials");
+        // Scan runs inside init() (pre-mesh, WiFi is free for all-channel scan)
+        MeshConductor::init();
+        MeshConductor::start();
     } else {
         SqLog.println("[boot] Normal boot — mesh scan");
         MeshConductor::init();

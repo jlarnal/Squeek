@@ -5,7 +5,7 @@
 #include <stdbool.h>
 #include "bsp.hpp"
 
-#define RTC_STATE_MAGIC  0x53514B06  // "SQK" + version 6
+#define RTC_STATE_MAGIC  0x53514B07  // "SQK" + version 7
 
 // Peer flags (carried over from rtc_mesh_map.h)
 #define PEER_FLAG_ALIVE    0x01
@@ -41,6 +41,13 @@ struct rtc_state_t {
     // Delegate ticket (persists across gateway handoffs)
     uint8_t  ticket_delegate_mac[6]; // MAC of the active delegate (all-zero = no ticket)
     uint16_t ticket_remaining_s;     // monotonic countdown, floors at zero
+
+    // Scan delegate (credential verification via reboot)
+    char     scan_ssid[33];      // SSID to verify (null-terminated)
+    char     scan_pass[65];      // password for the SSID
+    uint8_t  scan_result;        // 0=not run, 1=found, 2=not found
+    uint8_t  scan_channel;       // channel where SSID was found (if result==1)
+    int8_t   scan_rssi;          // RSSI of found SSID (if result==1)
 
     // Integrity (must be last)
     uint32_t crc;                // esp_rom_crc32_le over everything above
