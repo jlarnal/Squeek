@@ -96,6 +96,7 @@ constexpr gpio_num_t PIEZO_PIN_B = GPIO_NUM_23;  // push-pull complement
 #define MESH_RETRY_DELAY_MS  2000
 #define MESH_MAX_RETRIES     10
 #define MESH_REELECT_SLEEP_MS 5000   // sleep before reboot on gateway loss
+#define MESH_PRESCAN_TIMEOUT_MS 5000 // brief mesh scan before election (late-joiner detection)
 
 // Fast-path boot
 #define NVS_DEFAULT_FAST_SCAN  5        // reduced scan wait (seconds) on fast-boot

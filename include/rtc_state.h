@@ -5,7 +5,7 @@
 #include <stdbool.h>
 #include "bsp.hpp"
 
-#define RTC_STATE_MAGIC  0x53514B07  // "SQK" + version 7
+#define RTC_STATE_MAGIC  0x53514B08  // "SQK" + version 8
 
 // Peer flags (carried over from rtc_mesh_map.h)
 #define PEER_FLAG_ALIVE    0x01
@@ -37,6 +37,7 @@ struct rtc_state_t {
     uint8_t  next_role;          // role to boot into (0xFF = normal election)
     uint8_t  delegate_attempts;  // consecutive failed delegation attempts
     uint8_t  waived_low_battery; // set when gateway waived root due to low battery
+    uint8_t  force_gateway;      // nonzero = force self as gateway on next boot
 
     // Delegate ticket (persists across gateway handoffs)
     uint8_t  ticket_delegate_mac[6]; // MAC of the active delegate (all-zero = no ticket)

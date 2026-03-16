@@ -650,7 +650,8 @@ Delegation is **manually triggered** by pressing the BOOT button (GPIO9) on the 
 
 **BOOT button behavior:**
 - **GATEWAY role active:** initiate delegation — scan contest among peers, best peer becomes delegate
-- **Otherwise:** ignored (ESP-MESH handles root election natively)
+- **Connected PEER:** send `MSG_TYPE_FORCE_GATEWAY` to gateway — manual gateway designation (see Scenario 8)
+- **Disconnected node:** force self-election as root via `esp_mesh_set_type(MESH_ROOT)`
 
 **Scan contest:** When the gateway receives a BOOT button press:
 1. Gateway broadcasts `MSG_TYPE_SCAN_REQUEST` to all peers
@@ -741,6 +742,28 @@ Gateway prints warning. Credentials remain in `CredentialTable` (user may retry 
 1. `wifi set` with no peers → write creds + `SCAN_DELEGATE` to RTC, reboot
 2. Boot → scan → if found, reboot again into normal mesh with router config on verified channel
 3. If not found, boot into routerless mesh, print warning
+
+#### Scenario 8 — Force Gateway (manual gateway designation via BOOT button)
+
+A secondary, manual method to designate a specific peer as the new gateway — no election involved. Triggered by pressing the BOOT button (GPIO9) on a **connected peer**.
+
+**Guard:** Rejected if the gateway has an active delegate ticket (`hasDelegateTicket()`).
+
+**Flow:**
+1. User presses BOOT button on connected peer A
+2. Peer A sends `MSG_TYPE_FORCE_GATEWAY` (0xB0) to gateway B
+3. Gateway B validates (no active delegation), broadcasts `MSG_TYPE_REBOOT_WARN` (best-effort notification to all peers), sends `MSG_TYPE_FORCE_GATEWAY_GO` (0xB1) to peer A
+4. Peer A receives GO → sets `force_gateway = 1` in RTC → reboots
+5. Gateway B reboots after 500 ms delay (lets messages flush)
+6. On reboot: A's RTC `force_gateway` flag → skip election → `esp_mesh_set_type(MESH_ROOT)` → becomes gateway. Flag is consumed (cleared) after use
+7. B boots normally → joins mesh → becomes peer
+8. Other peers: mesh self-heals, reconnect to A as new root
+
+**RTC field:** `force_gateway` (uint8_t) in `rtc_state_t`. Nonzero = force self as gateway on next boot. Cleared immediately after setting `MESH_ROOT`.
+
+**Message types:**
+- `MSG_TYPE_FORCE_GATEWAY` (0xB0): peer → gateway, 1 byte (type only)
+- `MSG_TYPE_FORCE_GATEWAY_GO` (0xB1): gateway → peer, 1 byte (type only)
 
 #### Credential Exchange Protocol
 

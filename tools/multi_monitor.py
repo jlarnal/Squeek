@@ -248,10 +248,14 @@ class ExceptionDecoder:
 
     def feed_line(self, line: str) -> str | None:
         """Feed one serial line. Returns decoded output on crash end, else None."""
-        if "Guru Meditation Error" in line:
+        if "Guru Meditation Error" in line or "abort() was called at PC" in line:
             self._in_crash = True
             self._key_addrs.clear()
             self._stack_addrs.clear()
+            # Capture PC from abort() line
+            m = re.search(r"abort\(\) was called at PC (0x[0-9a-fA-F]+)", line)
+            if m:
+                self._key_addrs.append(m.group(1))
             return None
 
         if not self._in_crash:

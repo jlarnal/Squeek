@@ -58,6 +58,12 @@ static bool           s_electionRan    = false;
 static bool           s_scanResultPending = false;
 static bool        s_hasRouterCreds = false;     // true when real WiFi creds loaded
 
+// Pre-scan state (brief mesh start before election to detect existing mesh)
+static bool        s_prescanActive  = false;     // true during init() mesh prescan
+static bool        s_prescanFound   = false;     // prescan found an existing mesh
+static uint8_t     s_prescanChannel = 0;         // channel of the found mesh
+static SemaphoreHandle_t s_prescanSema = nullptr;
+
 static void assignRoleFromMeshState();  // forward decl
 
 // Channel lock — stop continuous scanning after mesh forms
@@ -684,6 +690,42 @@ static void meshRxTask(void* pvParameters) {
                     });
                 if (t) xTimerStart(t, 0);
             }
+            // --- Force gateway (manual gateway designation) ---
+            else if (msgType == MSG_TYPE_FORCE_GATEWAY && data.size >= sizeof(ForceGatewayMsg)) {
+                if (s_role && s_role->roleId() == RoleId::GATEWAY) {
+                    Gateway* gw = static_cast<Gateway*>(s_role);
+                    if (gw->hasDelegateTicket()) {
+                        SqLog.println("[mesh] FORCE_GATEWAY rejected — delegate active");
+                    } else {
+                        SqLog.printf("[mesh] FORCE_GATEWAY from %02X:%02X:%02X:%02X:%02X:%02X — yielding\n",
+                            from.addr[0], from.addr[1], from.addr[2],
+                            from.addr[3], from.addr[4], from.addr[5]);
+                        // Broadcast reboot warning (best-effort notification)
+                        RebootWarnMsg rw = {};
+                        rw.type = MSG_TYPE_REBOOT_WARN;
+                        rw.delay_ms = 500;
+                        MeshConductor::broadcastToAll(&rw, sizeof(rw));
+                        // Confirm to requesting peer
+                        ForceGatewayGoMsg go = {};
+                        go.type = MSG_TYPE_FORCE_GATEWAY_GO;
+                        MeshConductor::sendToNode(from.addr, &go, sizeof(go));
+                        // Deferred reboot — let messages flush
+                        TimerHandle_t t = xTimerCreate("forceGwReboot", pdMS_TO_TICKS(500),
+                            pdFALSE, nullptr, [](TimerHandle_t timer) {
+                                xTimerDelete(timer, 0);
+                                esp_restart();
+                            });
+                        if (t) xTimerStart(t, 0);
+                    }
+                }
+            }
+            else if (msgType == MSG_TYPE_FORCE_GATEWAY_GO && data.size >= sizeof(ForceGatewayGoMsg)) {
+                SqLog.println("[mesh] FORCE_GATEWAY_GO — rebooting as forced gateway");
+                rtc_state_t* rtc = RtcState::get();
+                rtc->force_gateway = 1;
+                RtcState::save();
+                esp_restart();
+            }
             // --- Credential exchange protocol ---
             else if (msgType == MSG_TYPE_CRED_OFFER && data.size >= 2) {
                 // Peer receives cred offer from gateway
@@ -789,6 +831,18 @@ static void meshRxTask(void* pvParameters) {
 
 static void meshEventHandler(void* arg, esp_event_base_t event_base,
                               int32_t event_id, void* event_data) {
+    // During prescan, only process FIND_NETWORK — skip Rx task creation,
+    // state changes, role assignment, etc.
+    if (s_prescanActive) {
+        if (event_id == MESH_EVENT_FIND_NETWORK) {
+            mesh_event_find_network_t* net = (mesh_event_find_network_t*)event_data;
+            SqLog.printf("[mesh] Pre-scan: found mesh on ch%d\n", net->channel);
+            s_prescanChannel = (uint8_t)net->channel;
+            if (s_prescanSema) xSemaphoreGive(s_prescanSema);
+        }
+        return;
+    }
+
     switch (event_id) {
     case MESH_EVENT_STARTED:
         SqLog.println("[mesh] Mesh started");
@@ -999,13 +1053,22 @@ void MeshConductor::init() {
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    // ESP-NOW election runs here — BEFORE esp_mesh_init() which takes over WiFi internals
+    // Initialize mesh early — needed for prescan before election.
+    // esp_mesh_init() just registers hooks; it doesn't start mesh tasks
+    // or take over WiFi, so the scan-delegate WiFi scan and ESP-NOW
+    // election still work fine after this.
+    ESP_ERROR_CHECK(esp_mesh_init());
+    ESP_ERROR_CHECK(esp_event_handler_register(MESH_EVENT, ESP_EVENT_ANY_ID,
+                                                &meshEventHandler, NULL));
+
+    // ESP-NOW election runs here — BEFORE esp_mesh_start() which takes over WiFi internals
     bool isDelegateReturn = RtcState::isValid() && RtcState::get()->delegate_active;
     // Scan delegate: scan_ssid is populated + scan_result==0 means scan hasn't run yet
     bool isScanDelegate   = RtcState::isValid() &&
                             RtcState::get()->scan_ssid[0] != '\0' &&
                             RtcState::get()->scan_result == 0;
-    bool skipElection = isDelegateReturn || isScanDelegate;
+    bool isForceGateway = RtcState::isValid() && RtcState::get()->force_gateway;
+    bool skipElection = isDelegateReturn || isScanDelegate || isForceGateway;
 
     // Scan delegate: run all-channel scan NOW while WiFi is free (pre-mesh)
     if (isScanDelegate) {
@@ -1063,15 +1126,59 @@ void MeshConductor::init() {
         bool suppressCreds = isDelegateReturn;
         s_hasRouterCreds = credsInNvs && !suppressCreds;
 
-        s_electionResult = EspNowElection::run();
-        s_electionRan = true;
+        // --- Pre-scan: briefly start mesh to detect an existing SQUEEK network ---
+        // If a mesh is already running, we skip the election and join as peer.
+        // If not, we stop and fall through to the ESP-NOW election as usual.
+        {
+            s_prescanSema = xSemaphoreCreateBinary();
+            s_prescanActive = true;
+
+            mesh_cfg_t pre = MESH_INIT_CONFIG_DEFAULT();
+            memcpy((uint8_t*)&pre.mesh_id, s_meshId, 6);
+            if (s_hasRouterCreds) {
+                memcpy(pre.router.ssid, ssid, strlen(ssid));
+                pre.router.ssid_len = strlen(ssid);
+                memcpy(pre.router.password, pass, strlen(pass));
+            }
+            pre.channel = 0;  // scan all channels
+            pre.mesh_ap.max_connection = 6;
+            pre.crypto_funcs = NULL;
+
+            esp_mesh_set_config(&pre);
+            esp_mesh_set_max_layer(MESH_MAX_LAYER);
+            esp_mesh_set_self_organized(true, true);
+            esp_mesh_start();
+
+            SqLog.println("[mesh] Pre-scan: searching for existing mesh...");
+
+            s_prescanFound = (xSemaphoreTake(s_prescanSema,
+                                pdMS_TO_TICKS(MESH_PRESCAN_TIMEOUT_MS)) == pdTRUE);
+
+            esp_mesh_stop();
+            vTaskDelay(pdMS_TO_TICKS(100));
+
+            s_prescanActive = false;
+            vSemaphoreDelete(s_prescanSema);
+            s_prescanSema = nullptr;
+
+            // esp_mesh_stop() on ESP-IDF 5.5.2 tears down mesh init state.
+            // Re-init so start() can reconfigure and start fresh.
+            esp_mesh_deinit();
+            ESP_ERROR_CHECK(esp_mesh_init());
+
+            if (s_prescanFound) {
+                SqLog.printf("[mesh] Pre-scan: mesh found on ch%u — skipping election\n",
+                             s_prescanChannel);
+            } else {
+                SqLog.println("[mesh] Pre-scan: no mesh found — proceeding to election");
+            }
+        }
+
+        if (!s_prescanFound) {
+            s_electionResult = EspNowElection::run();
+            s_electionRan = true;
+        }
     }
-
-    // Initialize mesh
-    ESP_ERROR_CHECK(esp_mesh_init());
-
-    ESP_ERROR_CHECK(esp_event_handler_register(MESH_EVENT, ESP_EVENT_ANY_ID,
-                                                &meshEventHandler, NULL));
 
     // BOOT button (GPIO9) — gateway: delegate, disconnected: force root
     gpio_config_t btn_cfg = {};
@@ -1103,6 +1210,8 @@ void MeshConductor::start() {
     ElectionResult election = {};
     if (s_electionRan) {
         election = s_electionResult;
+    } else if (s_prescanFound) {
+        SqLog.println("[mesh] No election ran (prescan found existing mesh)");
     } else {
         SqLog.println("[mesh] No election ran (delegate return or pre-assigned role)");
         esp_read_mac(election.winner_mac, ESP_MAC_WIFI_STA);
@@ -1126,10 +1235,13 @@ void MeshConductor::start() {
         SqLog.println("[mesh] Suppressing router creds (delegate return)");
     }
 
-    // Channel: election result if available, otherwise legacy fallback
+    // Channel: prescan > election > legacy fallback
     bool isDelegateReturn = RtcState::isValid() && RtcState::get()->delegate_active;
     bool isScanDelegateReturn = RtcState::isValid() && RtcState::get()->scan_result != 0;
-    if (s_electionRan && election.candidate_count > 0) {
+    if (s_prescanFound) {
+        cfg.channel = s_prescanChannel;
+        SqLog.printf("[mesh] Channel from prescan: %u\n", cfg.channel);
+    } else if (s_electionRan && election.candidate_count > 0) {
         cfg.channel = election.target_channel;
         SqLog.printf("[mesh] Channel from election: %u\n", cfg.channel);
     } else if (isDelegateReturn || isScanDelegateReturn) {
@@ -1163,6 +1275,15 @@ void MeshConductor::start() {
         esp_mesh_set_type(MESH_ROOT);
     }
 
+    // Force gateway: button-triggered manual gateway designation
+    bool isForceGateway = RtcState::isValid() && RtcState::get()->force_gateway;
+    if (isForceGateway) {
+        SqLog.println("[mesh] Force-gateway flag — setting MESH_ROOT before start");
+        esp_mesh_set_type(MESH_ROOT);
+        RtcState::get()->force_gateway = 0;  // consume the flag
+        RtcState::save();
+    }
+
     // Reset state
     s_roleAssigned = (s_role != nullptr);
     s_parentRetries = 0;
@@ -1175,9 +1296,9 @@ void MeshConductor::start() {
     esp_log_level_set("mesh", ESP_LOG_ERROR);
     esp_log_level_set("wifi", ESP_LOG_ERROR);
 
-    // Election winner: assign GATEWAY immediately (don't wait for PARENT_CONNECTED,
-    // which only fires if/when the router is reachable)
-    if (s_electionRan && election.i_am_winner) {
+    // Election winner / force-gateway: assign GATEWAY immediately (don't wait for
+    // PARENT_CONNECTED, which only fires if/when the router is reachable)
+    if ((s_electionRan && election.i_am_winner) || isForceGateway) {
         if (!s_roleAssigned) {
             assignRoleFromMeshState();
         }
@@ -1232,6 +1353,12 @@ void MeshConductor::onBootButton() {
     if (s_role && s_role->roleId() == RoleId::GATEWAY) {
         SqLog.println("[mesh] BOOT button — gateway: starting delegation");
         static_cast<Gateway*>(s_role)->startDelegation();
+    } else if (s_connected && s_role && s_role->roleId() == RoleId::PEER) {
+        // Connected peer — request to become gateway
+        SqLog.println("[mesh] BOOT button — requesting force-gateway");
+        ForceGatewayMsg msg = {};
+        msg.type = MSG_TYPE_FORCE_GATEWAY;
+        sendToRoot(&msg, sizeof(msg));
     } else if (!s_connected && !esp_mesh_is_root()) {
         // Disconnected node — force self-election as root
         SqLog.println("[mesh] BOOT button — forcing root self-election");
@@ -1244,7 +1371,7 @@ void MeshConductor::onBootButton() {
             assignRoleFromMeshState();
         }
     } else {
-        SqLog.println("[mesh] BOOT button — ignored (connected peer)");
+        SqLog.println("[mesh] BOOT button — ignored");
     }
 }
 

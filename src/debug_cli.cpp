@@ -62,33 +62,34 @@ struct CliCommand {
 };
 
 static const CliCommand s_commands[] = {
-    { "battery",   cmd_battery,   "Read battery voltage and status" },
+    { "battery", cmd_battery, "Read battery voltage and status" },
     { "broadcast", cmd_broadcast, "Broadcast positions to all nodes" },
-    { "config",    cmd_config,    "NVS config: list|get|set" },
-    { "elect",     cmd_elect,     "Waive gateway role (ESP-MESH re-elects)" },
-    { "ftm",       cmd_ftm,       "FTM single-shot to first peer" },
-    { "help",      cmd_help,      "List all commands" },
-    { "led",       cmd_led,       "Blink status LED + RGB R/G/B test" },
-    { "mesh",      cmd_mesh,      "Join mesh, show peers, then stop" },
-    { "mode",      cmd_mode,      "Step down from gateway: 'mode peer'" },
-    { "orch",      cmd_orch,      "Orchestrator: travel|random|seq|sched|stop|status" },
-    { "peers",     cmd_peers,     "Show PeerTable (synced from gateway)" },
-    { "quiet",     cmd_quiet,     "Toggle background output suppression" },
-    { "reboot",    cmd_reboot,    "Reboot (esp_restart)" },
-    { "rtc",       cmd_rtc,       "RTC memory write/readback test" },
-    { "sleep",     cmd_sleep,     "Light sleep [seconds] (default 5)" },
-    { "solve",     cmd_solve,     "Run MDS position solver" },
-    { "status",    cmd_status,    "Print mesh state, role, battery, peers" },
-    { "sweep",     cmd_sweep,     "FTM full sweep, print distance matrix" },
-    { "temp",      cmd_temp,      "Read internal temperature sensor" },
-    { "tone",      cmd_tone,      "Interactive tone player (numpad)" },
-    { "wifi",      cmd_wifi,      "WiFi: scan|set|clear|status|creds|delegate" },
+    { "config", cmd_config, "NVS config: list|get|set" },
+    { "elect", cmd_elect, "Waive gateway role (ESP-MESH re-elects)" },
+    { "ftm", cmd_ftm, "FTM single-shot to first peer" },
+    { "help", cmd_help, "List all commands" },
+    { "led", cmd_led, "Blink status LED + RGB R/G/B test" },
+    { "mesh", cmd_mesh, "Join mesh, show peers, then stop" },
+    { "mode", cmd_mode, "Step down from gateway: 'mode peer'" },
+    { "orch", cmd_orch, "Orchestrator: travel|random|seq|sched|stop|status" },
+    { "peers", cmd_peers, "Show PeerTable (synced from gateway)" },
+    { "quiet", cmd_quiet, "Toggle background output suppression" },
+    { "reboot", cmd_reboot, "Reboot (esp_restart)" },
+    { "rtc", cmd_rtc, "RTC memory write/readback test" },
+    { "sleep", cmd_sleep, "Light sleep [seconds] (default 5)" },
+    { "solve", cmd_solve, "Run MDS position solver" },
+    { "status", cmd_status, "Print mesh state, role, battery, peers" },
+    { "sweep", cmd_sweep, "FTM full sweep, print distance matrix" },
+    { "temp", cmd_temp, "Read internal temperature sensor" },
+    { "tone", cmd_tone, "Interactive tone player (numpad)" },
+    { "wifi", cmd_wifi, "WiFi: scan|set|clear|status|creds|delegate" },
 };
 static constexpr int CMD_COUNT = sizeof(s_commands) / sizeof(s_commands[0]);
 
 // --- Command implementations ---
 
-static void cmd_help(const char* args) {
+static void cmd_help(const char* args)
+{
     (void)args;
     Serial.println("Available commands:");
     for (int i = 0; i < CMD_COUNT; i++) {
@@ -96,7 +97,8 @@ static void cmd_help(const char* args) {
     }
 }
 
-static void cmd_led(const char* args) {
+static void cmd_led(const char* args)
+{
     (void)args;
     auto saved = LedDriver::saveState();
 
@@ -119,21 +121,21 @@ static void cmd_led(const char* args) {
     Serial.println("LED test done.");
 }
 
-static void cmd_battery(const char* args) {
+static void cmd_battery(const char* args)
+{
     (void)args;
     PowerManager::init();
     uint32_t raw = PowerManager::batteryRaw();
     uint32_t mv  = PowerManager::batteryMv();
     Serial.printf("Battery RAW: %lu\n", raw);
     Serial.printf("Battery mV:  %lu\n", mv);
-    Serial.printf("Low: %s  Critical: %s\n",
-        PowerManager::isLowBattery() ? "YES" : "no",
-        PowerManager::isCriticalBattery() ? "YES" : "no");
+    Serial.printf("Low: %s  Critical: %s\n", PowerManager::isLowBattery() ? "YES" : "no", PowerManager::isCriticalBattery() ? "YES" : "no");
 }
 
-static void cmd_wifi(const char* args) {
+static void cmd_wifi(const char* args)
+{
     // Parse subcommand
-    char sub[16] = {};
+    char sub[16]  = {};
     char arg1[64] = {};
     char arg2[64] = {};
     if (args && *args) {
@@ -144,12 +146,12 @@ static void cmd_wifi(const char* args) {
         // Use esp_wifi_scan directly — Arduino WiFi.scanNetworks() crashes
         // when ESP-MESH is running (tries to create duplicate netif).
         Serial.println("Scanning WiFi...");
-        wifi_scan_config_t scanCfg = {};
-        scanCfg.show_hidden = false;
-        scanCfg.scan_type   = WIFI_SCAN_TYPE_ACTIVE;
+        wifi_scan_config_t scanCfg   = {};
+        scanCfg.show_hidden          = false;
+        scanCfg.scan_type            = WIFI_SCAN_TYPE_ACTIVE;
         scanCfg.scan_time.active.min = 120;
         scanCfg.scan_time.active.max = 300;
-        esp_err_t err = esp_wifi_scan_start(&scanCfg, true);
+        esp_err_t err                = esp_wifi_scan_start(&scanCfg, true);
         if (err != ESP_OK) {
             Serial.printf("Scan failed: %s\n", esp_err_to_name(err));
         } else {
@@ -158,22 +160,20 @@ static void cmd_wifi(const char* args) {
             if (apCount == 0) {
                 Serial.println("No networks found.");
             } else {
-                uint16_t maxAps = (apCount > 30) ? 30 : apCount;
+                uint16_t maxAps       = (apCount > 30) ? 30 : apCount;
                 wifi_ap_record_t* aps = (wifi_ap_record_t*)malloc(maxAps * sizeof(wifi_ap_record_t));
                 if (aps) {
                     esp_wifi_scan_get_ap_records(&maxAps, aps);
                     Serial.printf("Found %u networks:\n", maxAps);
                     for (uint16_t i = 0; i < maxAps; i++) {
-                        Serial.printf("  [%u] %-32s  RSSI:%d  CH:%d\n",
-                            i + 1, (const char*)aps[i].ssid, aps[i].rssi, aps[i].primary);
+                        Serial.printf("  [%u] %-32s  RSSI:%d  CH:%d\n", i + 1, (const char*)aps[i].ssid, aps[i].rssi, aps[i].primary);
                     }
                     free(aps);
                 }
             }
             esp_wifi_clear_ap_list();
         }
-    }
-    else if (strcmp(sub, "set") == 0) {
+    } else if (strcmp(sub, "set") == 0) {
         if (arg1[0] == '\0') {
             Serial.println("Usage: wifi set <ssid> [password]");
             return;
@@ -199,7 +199,7 @@ static void cmd_wifi(const char* args) {
             // Peer: forward creds to gateway — it will handle delegation
             Serial.println("Forwarding credentials to gateway...");
             ScanDelegateMsg msg = {};
-            msg.type = MSG_TYPE_SCAN_DELEGATE;
+            msg.type            = MSG_TYPE_SCAN_DELEGATE;
             strncpy(msg.ssid, arg1, 32);
             msg.ssid[32] = '\0';
             strncpy(msg.password, pass, 64);
@@ -207,16 +207,14 @@ static void cmd_wifi(const char* args) {
             MeshConductor::sendToRoot(&msg, sizeof(msg));
             Serial.println("Gateway will verify and propagate if valid.");
         }
-    }
-    else if (strcmp(sub, "clear") == 0) {
+    } else if (strcmp(sub, "clear") == 0) {
         if (SqWebServer::clearWifiCreds()) {
             Serial.println("WiFi credentials cleared");
             Serial.println("Reboot to apply (run: reboot)");
         } else {
             Serial.println("Failed to clear WiFi credentials");
         }
-    }
-    else if (strcmp(sub, "status") == 0) {
+    } else if (strcmp(sub, "status") == 0) {
         uint8_t credCount = CredentialTable::count();
         Serial.printf("Stored credentials: %u/%d slots\n", credCount, CRED_TABLE_SLOTS);
         Serial.printf("Web server: %s\n", SqWebServer::isRunning() ? "running" : "stopped");
@@ -224,13 +222,10 @@ static void cmd_wifi(const char* args) {
         Serial.printf("Setup Delegate: %s\n", (r && r->roleId() == RoleId::DELEGATE) ? "ACTIVE" : "inactive");
         Serial.printf("WiFi mode: %d\n", WiFi.getMode());
         if (WiFi.isConnected()) {
-            Serial.printf("STA connected: %s  IP=%s  RSSI=%d\n",
-                          WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(), WiFi.RSSI());
+            Serial.printf("STA connected: %s  IP=%s  RSSI=%d\n", WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(), WiFi.RSSI());
         }
-        Serial.printf("SoftAP IP: %s  clients=%d\n",
-                      WiFi.softAPIP().toString().c_str(), WiFi.softAPgetStationNum());
-    }
-    else if (strcmp(sub, "creds") == 0) {
+        Serial.printf("SoftAP IP: %s  clients=%d\n", WiFi.softAPIP().toString().c_str(), WiFi.softAPgetStationNum());
+    } else if (strcmp(sub, "creds") == 0) {
         uint8_t n = CredentialTable::count();
         if (n == 0) {
             Serial.println("No WiFi credentials stored.");
@@ -238,31 +233,30 @@ static void cmd_wifi(const char* args) {
             Serial.printf("%u credential(s):\n", n);
             for (uint8_t i = 0; i < CRED_TABLE_SLOTS; i++) {
                 const CredEntry* e = CredentialTable::getSlot(i);
-                if (!e) continue;
-                Serial.printf("  [%u] SSID: %-32s  Pass: %s\n",
-                    i, e->ssid, e->pass[0] ? e->pass : "(open)");
+                if (!e)
+                    continue;
+                Serial.printf("  [%u] SSID: %-32s  Pass: %s\n", i, e->ssid, e->pass[0] ? e->pass : "(open)");
             }
         }
-    }
-    else if (strcmp(sub, "delegate") == 0) {
+    } else if (strcmp(sub, "delegate") == 0) {
         IMeshRole* r = MeshConductor::role();
         if (r && r->roleId() == RoleId::DELEGATE) {
             Serial.println("Setup Delegate already active");
         } else {
             Serial.println("Rebooting into Setup Delegate mode...");
             rtc_state_t* rtc = RtcState::get();
-            rtc->next_role = (uint8_t)RoleId::DELEGATE;
+            rtc->next_role   = (uint8_t)RoleId::DELEGATE;
             RtcState::save();
             vTaskDelay(pdMS_TO_TICKS(200));
             esp_restart();
         }
-    }
-    else {
+    } else {
         Serial.println("wifi subcommands: scan, set <ssid> [pass], clear, status, creds, delegate");
     }
 }
 
-static void cmd_mesh(const char* args) {
+static void cmd_mesh(const char* args)
+{
     (void)args;
     Serial.println("Initializing mesh...");
     RtcState::init();
@@ -288,7 +282,8 @@ static void cmd_mesh(const char* args) {
     MeshConductor::stop();
 }
 
-static void cmd_elect(const char* args) {
+static void cmd_elect(const char* args)
+{
     (void)args;
     if (!MeshConductor::isConnected()) {
         Serial.println("Mesh not connected. Run 'mesh' first.");
@@ -303,12 +298,13 @@ static void cmd_elect(const char* args) {
     MeshConductor::requestStepDown();
 }
 
-static void cmd_rtc(const char* args) {
+static void cmd_rtc(const char* args)
+{
     (void)args;
     Serial.println("RTC memory test...");
     RtcState::init();
 
-    rtc_state_t* map  = RtcState::get();
+    rtc_state_t* map     = RtcState::get();
     map->own_short_id    = 42;
     map->mesh_generation = 12345;
     map->peer_count      = 1;
@@ -338,11 +334,13 @@ static void cmd_rtc(const char* args) {
     RtcState::print();
 }
 
-static void cmd_sleep(const char* args) {
+static void cmd_sleep(const char* args)
+{
     uint32_t secs = 5;
     if (args && *args) {
         int val = atoi(args);
-        if (val > 0) secs = (uint32_t)val;
+        if (val > 0)
+            secs = (uint32_t)val;
     }
 
     Serial.printf("Sleeping for %lu seconds...\n", secs);
@@ -352,7 +350,8 @@ static void cmd_sleep(const char* args) {
     Serial.println("Woke up from light sleep!");
 }
 
-static void cmd_peers(const char* args) {
+static void cmd_peers(const char* args)
+{
     (void)args;
     if (!MeshConductor::isConnected()) {
         Serial.println("Mesh not connected. Run 'mesh' first.");
@@ -366,42 +365,60 @@ static void cmd_peers(const char* args) {
 }
 
 // Numpad key-to-tone mapping (index 0-9, nullptr = unassigned)
-static const struct { const char* name; const char* label; } s_padSlots[10] = {
-    { nullptr,      "stop"       },  // 0
-    { "chirp",      "chirp"      },  // 1
-    { "chirp_down", "chirp down" },  // 2
-    { "squeak",     "squeak"     },  // 3
-    { "warble",     "warble"     },  // 4
-    { "alert",      "alert"      },  // 5
-    { "fade_chirp", "fade chirp" },  // 6
-    { nullptr,      "---"        },  // 7
-    { nullptr,      "---"        },  // 8
-    { nullptr,      "---"        },  // 9
+static const struct {
+    const char* name;
+    const char* label;
+} s_padSlots[10] = {
+    { nullptr, "stop" }, // 0
+    { "chirp", "chirp" }, // 1
+    { "chirp_down", "chirp down" }, // 2
+    { "squeak", "squeak" }, // 3
+    { "warble", "warble" }, // 4
+    { "alert", "alert" }, // 5
+    { "fade_chirp", "fade chirp" }, // 6
+    { nullptr, "---" }, // 7
+    { nullptr, "---" }, // 8
+    { nullptr, "---" }, // 9
 };
 
-static void tonePadDraw(const char* status) {
+static void tonePadDraw(const char* status)
+{
     Serial.println("Tone Player (press key, '.' to quit)");
-    Serial.println("\xe2\x94\x8c\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xac\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xac\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x90");  // ┌───────┬───────┬───────┐
+    Serial.println("\xe2\x94\x8c\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xac\xe2\x94\x80\xe2\x94"
+                   "\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xac\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2"
+                   "\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x90"); // ┌───────┬───────┬───────┐
     // Row: 7 8 9
     Serial.printf("\xe2\x94\x82 7     \xe2\x94\x82 8     \xe2\x94\x82 9     \xe2\x94\x82\n");
-    Serial.printf("\xe2\x94\x82 %-5s \xe2\x94\x82 %-5s \xe2\x94\x82 %-5s \xe2\x94\x82\n", s_padSlots[7].label, s_padSlots[8].label, s_padSlots[9].label);
-    Serial.println("\xe2\x94\x9c\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xbc\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xbc\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xa4");  // ├───────┼───────┼───────┤
+    Serial.printf(
+      "\xe2\x94\x82 %-5s \xe2\x94\x82 %-5s \xe2\x94\x82 %-5s \xe2\x94\x82\n", s_padSlots[7].label, s_padSlots[8].label, s_padSlots[9].label);
+    Serial.println("\xe2\x94\x9c\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xbc\xe2\x94\x80\xe2\x94"
+                   "\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xbc\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2"
+                   "\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xa4"); // ├───────┼───────┼───────┤
     // Row: 4 5 6
     Serial.printf("\xe2\x94\x82 4     \xe2\x94\x82 5     \xe2\x94\x82 6     \xe2\x94\x82\n");
-    Serial.printf("\xe2\x94\x82 %-5s \xe2\x94\x82 %-5s \xe2\x94\x82 %-5s \xe2\x94\x82\n", s_padSlots[4].label, s_padSlots[5].label, s_padSlots[6].label);
-    Serial.println("\xe2\x94\x9c\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xbc\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xbc\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xa4");  // ├───────┼───────┼───────┤
+    Serial.printf(
+      "\xe2\x94\x82 %-5s \xe2\x94\x82 %-5s \xe2\x94\x82 %-5s \xe2\x94\x82\n", s_padSlots[4].label, s_padSlots[5].label, s_padSlots[6].label);
+    Serial.println("\xe2\x94\x9c\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xbc\xe2\x94\x80\xe2\x94"
+                   "\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xbc\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2"
+                   "\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xa4"); // ├───────┼───────┼───────┤
     // Row: 1 2 3
     Serial.printf("\xe2\x94\x82 1     \xe2\x94\x82 2     \xe2\x94\x82 3     \xe2\x94\x82\n");
-    Serial.printf("\xe2\x94\x82 %-5s \xe2\x94\x82 %-5s \xe2\x94\x82 %-5s \xe2\x94\x82\n", s_padSlots[1].label, s_padSlots[2].label, s_padSlots[3].label);
-    Serial.println("\xe2\x94\x9c\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xb4\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xbc\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xa4");  // ├───────┴───────┼───────┤
+    Serial.printf(
+      "\xe2\x94\x82 %-5s \xe2\x94\x82 %-5s \xe2\x94\x82 %-5s \xe2\x94\x82\n", s_padSlots[1].label, s_padSlots[2].label, s_padSlots[3].label);
+    Serial.println("\xe2\x94\x9c\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xb4\xe2\x94\x80\xe2\x94"
+                   "\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xbc\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2"
+                   "\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xa4"); // ├───────┴───────┼───────┤
     Serial.println("\xe2\x94\x82     0 = stop  \xe2\x94\x82 . quit\xe2\x94\x82");
-    Serial.println("\xe2\x94\x94\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xb4\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x98");  // └───────────────┴───────┘
+    Serial.println("\xe2\x94\x94\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94"
+                   "\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xb4\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2"
+                   "\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x98"); // └───────────────┴───────┘
     if (status && *status) {
         Serial.printf("[%s]\n", status);
     }
 }
 
-static void cmd_tone(const char* args) {
+static void cmd_tone(const char* args)
+{
     (void)args;
     tonePadDraw(nullptr);
 
@@ -425,7 +442,8 @@ static void cmd_tone(const char* args) {
                 AudioEngine::stop();
             } else if (s_padSlots[idx].name) {
                 const ToneSequence* seq = ToneLibrary::get(s_padSlots[idx].name);
-                if (seq) AudioEngine::play(seq);
+                if (seq)
+                    AudioEngine::play(seq);
             }
         }
         // Ignore other keys silently
@@ -434,21 +452,21 @@ static void cmd_tone(const char* args) {
 
 static uint8_t s_configReqId = 0;
 
-static void configDumpLocal() {
+static void configDumpLocal()
+{
     JsonDocument doc;
     uint8_t own_mac[6];
     esp_read_mac(own_mac, ESP_MAC_WIFI_STA);
     char macStr[18];
-    snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
-        own_mac[0], own_mac[1], own_mac[2],
-        own_mac[3], own_mac[4], own_mac[5]);
+    snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X", own_mac[0], own_mac[1], own_mac[2], own_mac[3], own_mac[4], own_mac[5]);
     doc["mac"] = macStr;
     configBuildJson(doc, nullptr, 0);
     serializeJsonPretty(doc, Serial);
     Serial.println();
 }
 
-static void configSetLocal(const char* args) {
+static void configSetLocal(const char* args)
+{
     // Parse key=val pairs from args
     char buf[128];
     strncpy(buf, args, sizeof(buf) - 1);
@@ -459,9 +477,9 @@ static void configSetLocal(const char* args) {
     while (token) {
         char* eq = strchr(token, '=');
         if (eq) {
-            *eq = '\0';
-            const char* key = token;
-            const char* val = eq + 1;
+            *eq                  = '\0';
+            const char* key      = token;
+            const char* val      = eq + 1;
             const ConfigField* f = configLookup(key);
             if (!f) {
                 Serial.printf("Unknown field: %s\n", key);
@@ -483,7 +501,8 @@ static void configSetLocal(const char* args) {
     configDumpLocal();
 }
 
-static void configRemoteGetSet(bool isSet, const char* target, const char* rest) {
+static void configRemoteGetSet(bool isSet, const char* target, const char* rest)
+{
     if (!MeshConductor::isConnected()) {
         Serial.println("Mesh not connected.");
         return;
@@ -498,13 +517,13 @@ static void configRemoteGetSet(bool isSet, const char* target, const char* rest)
             char buf[128];
             strncpy(buf, rest, sizeof(buf) - 1);
             buf[sizeof(buf) - 1] = '\0';
-            char* token = strtok(buf, " ");
+            char* token          = strtok(buf, " ");
             while (token) {
                 char* eq = strchr(token, '=');
                 if (eq) {
-                    *eq = '\0';
-                    const char* key = token;
-                    const char* val = eq + 1;
+                    *eq                  = '\0';
+                    const char* key      = token;
+                    const char* val      = eq + 1;
                     const ConfigField* f = configLookup(key);
                     if (!f) {
                         Serial.printf("Unknown field: %s\n", key);
@@ -527,7 +546,7 @@ static void configRemoteGetSet(bool isSet, const char* target, const char* rest)
             char buf[128];
             strncpy(buf, rest, sizeof(buf) - 1);
             buf[sizeof(buf) - 1] = '\0';
-            char* token = strtok(buf, " ");
+            char* token          = strtok(buf, " ");
             while (token) {
                 arr.add(token);
                 token = strtok(nullptr, " ");
@@ -552,9 +571,7 @@ static void configRemoteGetSet(bool isSet, const char* target, const char* rest)
             uint8_t own_mac[6];
             esp_read_mac(own_mac, ESP_MAC_WIFI_STA);
             char macStr[18];
-            snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
-                own_mac[0], own_mac[1], own_mac[2],
-                own_mac[3], own_mac[4], own_mac[5]);
+            snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X", own_mac[0], own_mac[1], own_mac[2], own_mac[3], own_mac[4], own_mac[5]);
             localDoc["mac"] = macStr;
             if (!isSet && rest && *rest) {
                 // Parse field names for filtered get
@@ -563,8 +580,11 @@ static void configRemoteGetSet(bool isSet, const char* target, const char* rest)
                 fbuf[sizeof(fbuf) - 1] = '\0';
                 const char* fptrs[16];
                 uint8_t fc = 0;
-                char* tok = strtok(fbuf, " ");
-                while (tok && fc < 16) { fptrs[fc++] = tok; tok = strtok(nullptr, " "); }
+                char* tok  = strtok(fbuf, " ");
+                while (tok && fc < 16) {
+                    fptrs[fc++] = tok;
+                    tok         = strtok(nullptr, " ");
+                }
                 configBuildJson(localDoc, fptrs, fc);
             } else {
                 configBuildJson(localDoc, nullptr, 0);
@@ -580,9 +600,12 @@ static void configRemoteGetSet(bool isSet, const char* target, const char* rest)
 
         for (uint8_t i = 0; i < count; i++) {
             PeerEntry* e = MeshConductor::isGateway() ? PeerTable::getEntryByIndex(i) : nullptr;
-            if (!e) continue;
-            if (memcmp(e->mac, own_mac, 6) == 0) continue;
-            if (e->flags & PEER_STATUS_DEAD) continue;
+            if (!e)
+                continue;
+            if (memcmp(e->mac, own_mac, 6) == 0)
+                continue;
+            if (e->flags & PEER_STATUS_DEAD)
+                continue;
 
             uint8_t reqId = ++s_configReqId;
             Serial.printf("[%u] Requesting %02X:%02X... ", i, e->mac[4], e->mac[5]);
@@ -598,7 +621,7 @@ static void configRemoteGetSet(bool isSet, const char* target, const char* rest)
             }
         }
     } else {
-        int slot = atoi(target);
+        int slot     = atoi(target);
         PeerEntry* e = MeshConductor::isGateway() ? PeerTable::getEntryByIndex((uint8_t)slot) : nullptr;
         if (!e) {
             Serial.printf("Peer slot %d not found.\n", slot);
@@ -610,8 +633,8 @@ static void configRemoteGetSet(bool isSet, const char* target, const char* rest)
         }
 
         uint8_t reqId = ++s_configReqId;
-        Serial.printf("Requesting slot %d (%02X:%02X:%02X:%02X:%02X:%02X)...\n",
-            slot, e->mac[0], e->mac[1], e->mac[2], e->mac[3], e->mac[4], e->mac[5]);
+        Serial.printf(
+          "Requesting slot %d (%02X:%02X:%02X:%02X:%02X:%02X)...\n", slot, e->mac[0], e->mac[1], e->mac[2], e->mac[3], e->mac[4], e->mac[5]);
 
         if (MeshConductor::sendConfigReq(e->mac, reqJson, reqId)) {
             char resp[480];
@@ -626,7 +649,8 @@ static void configRemoteGetSet(bool isSet, const char* target, const char* rest)
     }
 }
 
-static void cmd_config(const char* args) {
+static void cmd_config(const char* args)
+{
     if (!args || !*args) {
         configDumpLocal();
         return;
@@ -638,11 +662,11 @@ static void cmd_config(const char* args) {
     buf[sizeof(buf) - 1] = '\0';
 
     char* subcmd = buf;
-    char* rest = nullptr;
+    char* rest   = nullptr;
     for (int i = 0; buf[i]; i++) {
         if (buf[i] == ' ') {
             buf[i] = '\0';
-            rest = &buf[i + 1];
+            rest   = &buf[i + 1];
             break;
         }
     }
@@ -663,7 +687,7 @@ static void cmd_config(const char* args) {
         for (int i = 0; rest[i]; i++) {
             if (rest[i] == ' ') {
                 rest[i] = '\0';
-                fields = &rest[i + 1];
+                fields  = &rest[i + 1];
                 break;
             }
         }
@@ -678,11 +702,11 @@ static void cmd_config(const char* args) {
         }
         // Extract target
         char* target = rest;
-        char* pairs = nullptr;
+        char* pairs  = nullptr;
         for (int i = 0; rest[i]; i++) {
             if (rest[i] == ' ') {
                 rest[i] = '\0';
-                pairs = &rest[i + 1];
+                pairs   = &rest[i + 1];
                 break;
             }
         }
@@ -690,7 +714,8 @@ static void cmd_config(const char* args) {
         // If the first token contains '=', it's a key=val pair — default to local
         if (strchr(target, '=')) {
             // Rejoin target and pairs (undo the split)
-            if (pairs) *(pairs - 1) = ' ';
+            if (pairs)
+                *(pairs - 1) = ' ';
             configSetLocal(target);
             return;
         }
@@ -715,7 +740,8 @@ static void cmd_config(const char* args) {
     Serial.println("Usage: config [list|get <slot|*> [fields...]|set [slot|*] key=val...]");
 }
 
-static void cmd_mode(const char* args) {
+static void cmd_mode(const char* args)
+{
     if (!args || !*args || strcasecmp(args, "peer") != 0) {
         Serial.println("Usage: mode peer");
         return;
@@ -735,7 +761,8 @@ static void cmd_mode(const char* args) {
     MeshConductor::stepDown();
 }
 
-static void cmd_ftm(const char* args) {
+static void cmd_ftm(const char* args)
+{
     (void)args;
     if (!MeshConductor::isConnected()) {
         Serial.println("Mesh not connected. Run 'mesh' first.");
@@ -747,11 +774,9 @@ static void cmd_ftm(const char* args) {
     if (MeshConductor::isGateway() && PeerTable::peerCount() >= 2) {
         PeerEntry* peer = PeerTable::getEntryByIndex(1);
         if (peer && !(peer->flags & PEER_STATUS_DEAD)) {
-            Serial.printf("Ranging to peer slot 1: %02X:%02X:%02X:%02X:%02X:%02X (SoftAP: %02X:%02X:%02X:%02X:%02X:%02X)\n",
-                peer->mac[0], peer->mac[1], peer->mac[2],
-                peer->mac[3], peer->mac[4], peer->mac[5],
-                peer->softap_mac[0], peer->softap_mac[1], peer->softap_mac[2],
-                peer->softap_mac[3], peer->softap_mac[4], peer->softap_mac[5]);
+            Serial.printf("Ranging to peer slot 1: %02X:%02X:%02X:%02X:%02X:%02X (SoftAP: %02X:%02X:%02X:%02X:%02X:%02X)\n", peer->mac[0],
+              peer->mac[1], peer->mac[2], peer->mac[3], peer->mac[4], peer->mac[5], peer->softap_mac[0], peer->softap_mac[1], peer->softap_mac[2],
+              peer->softap_mac[3], peer->softap_mac[4], peer->softap_mac[5]);
 
             // Use mesh config channel — esp_wifi_get_channel() is unreliable on root
             mesh_cfg_t mcfg;
@@ -768,23 +793,22 @@ static void cmd_ftm(const char* args) {
         }
     }
 
-    Serial.printf("No peer available for FTM. PeerTable has %d entries (need >= 2).\n",
-        PeerTable::peerCount());
+    Serial.printf("No peer available for FTM. PeerTable has %d entries (need >= 2).\n", PeerTable::peerCount());
     if (!MeshConductor::isGateway()) {
         Serial.println("(Not gateway -- FTM ranging only runs on gateway)");
     } else if (PeerTable::peerCount() >= 2) {
         PeerEntry* p = PeerTable::getEntryByIndex(1);
         if (p) {
-            Serial.printf("Slot 1 SoftAP: %02X:%02X:%02X:%02X:%02X:%02X flags=0x%02X\n",
-                p->softap_mac[0], p->softap_mac[1], p->softap_mac[2],
-                p->softap_mac[3], p->softap_mac[4], p->softap_mac[5], p->flags);
+            Serial.printf("Slot 1 SoftAP: %02X:%02X:%02X:%02X:%02X:%02X flags=0x%02X\n", p->softap_mac[0], p->softap_mac[1], p->softap_mac[2],
+              p->softap_mac[3], p->softap_mac[4], p->softap_mac[5], p->flags);
         }
     } else {
         Serial.println("(Peer must have sent a heartbeat so its SoftAP MAC is in PeerTable)");
     }
 }
 
-static void cmd_sweep(const char* args) {
+static void cmd_sweep(const char* args)
+{
     (void)args;
     if (!MeshConductor::isGateway()) {
         Serial.println("Not gateway -- FTM sweep only runs on gateway.");
@@ -814,21 +838,26 @@ static void cmd_sweep(const char* args) {
     uint8_t n = PeerTable::peerCount();
     Serial.println("Distance matrix (cm):");
     Serial.print("      ");
-    for (uint8_t j = 0; j < n; j++) Serial.printf(" %5u", j);
+    for (uint8_t j = 0; j < n; j++)
+        Serial.printf(" %5u", j);
     Serial.println();
     for (uint8_t i = 0; i < n; i++) {
         Serial.printf("  [%u] ", i);
         for (uint8_t j = 0; j < n; j++) {
             float d = PeerTable::getDistance(i, j);
-            if (i == j) Serial.print("    - ");
-            else if (d < 0) Serial.print("    ? ");
-            else Serial.printf("%5.0f ", d);
+            if (i == j)
+                Serial.print("    - ");
+            else if (d < 0)
+                Serial.print("    ? ");
+            else
+                Serial.printf("%5.0f ", d);
         }
         Serial.println();
     }
 }
 
-static void cmd_solve(const char* args) {
+static void cmd_solve(const char* args)
+{
     (void)args;
     if (!MeshConductor::isGateway()) {
         Serial.println("Not gateway -- solver only runs on gateway.");
@@ -838,20 +867,20 @@ static void cmd_solve(const char* args) {
     Serial.println("Running MDS position solver...");
     PositionSolver::solve();
 
-    uint8_t n = PeerTable::peerCount();
+    uint8_t n   = PeerTable::peerCount();
     uint8_t dim = PeerTable::getDimension();
     Serial.printf("Positions (%uD):\n", dim);
     for (uint8_t i = 0; i < n; i++) {
         PeerEntry* e = PeerTable::getEntryByIndex(i);
         if (e) {
-            Serial.printf("  [%u] %02X:%02X  pos=(%.0f, %.0f, %.0f) cm  conf=%.2f\n",
-                i, e->mac[4], e->mac[5],
-                e->position[0], e->position[1], e->position[2], e->confidence);
+            Serial.printf("  [%u] %02X:%02X  pos=(%.0f, %.0f, %.0f) cm  conf=%.2f\n", i, e->mac[4], e->mac[5], e->position[0], e->position[1],
+              e->position[2], e->confidence);
         }
     }
 }
 
-static void cmd_broadcast(const char* args) {
+static void cmd_broadcast(const char* args)
+{
     (void)args;
     if (!MeshConductor::isGateway()) {
         Serial.println("Not gateway.");
@@ -861,16 +890,22 @@ static void cmd_broadcast(const char* args) {
     Serial.println("Positions broadcast sent.");
 }
 
-static void cmd_quiet(const char* args) {
+static void cmd_quiet(const char* args)
+{
     (void)args;
     bool newState = !SqLogClass::isQuiet();
     SqLogClass::setQuiet(newState);
     Serial.printf("Quiet mode: %s\n", newState ? "ON (background output suppressed)" : "OFF");
 }
 
-static void cmd_status(const char* args) {
+static void cmd_status(const char* args)
+{
     (void)args;
-    Serial.print("\033[1;96;40m"); // Bold cyan FG on black BG
+    if (MeshConductor::isGateway()) {
+        Serial.print("\033[1;95;40m"); // Bold magenta FG on black BG
+    } else {
+        Serial.print("\033[1;96;40m"); // Bold cyan FG on black BG
+    }
     Serial.printf("Squeek v%s (built " __DATE__ " " __TIME__ ")\n", SQUEEK_VERSION);
     Serial.printf("Uptime: %lu s  |  Free heap: %lu B\n", millis() / 1000, (unsigned long)esp_get_free_heap_size());
     Serial.printf("Battery: %lu mV\n", PowerManager::batteryMv());
@@ -885,9 +920,8 @@ static void cmd_status(const char* args) {
             Serial.printf("Temp: %.1f C\n", celsius);
     }
     Serial.printf("Mesh connected: %s\n", MeshConductor::isConnected() ? "yes" : "no");
-    IMeshRole* r = MeshConductor::role();
-    const char* role = (r && r->roleId() == RoleId::DELEGATE) ? "DELEGATE"
-                     : MeshConductor::isGateway()  ? "GATEWAY" : "NODE";
+    IMeshRole* r     = MeshConductor::role();
+    const char* role = (r && r->roleId() == RoleId::DELEGATE) ? "DELEGATE" : MeshConductor::isGateway() ? "GATEWAY" : "NODE";
     Serial.printf("Role: %s\n", role);
     if (MeshConductor::isConnected()) {
         MeshConductor::printStatus();
@@ -895,7 +929,8 @@ static void cmd_status(const char* args) {
     Serial.print("\033[0m"); // Resets VT100 formatting
 }
 
-static void cmd_orch(const char* args) {
+static void cmd_orch(const char* args)
+{
     if (!args || !*args) {
         Orchestrator::printStatus(Serial);
         return;
@@ -905,7 +940,7 @@ static void cmd_orch(const char* args) {
     strncpy(buf, args, sizeof(buf) - 1);
     buf[sizeof(buf) - 1] = '\0';
 
-    char* sub = strtok(buf, " ");
+    char* sub  = strtok(buf, " ");
     char* arg1 = strtok(nullptr, " ");
     char* arg2 = strtok(nullptr, " ");
     char* arg3 = strtok(nullptr, " ");
@@ -917,20 +952,20 @@ static void cmd_orch(const char* args) {
         }
         TravelOrder order = TRAVEL_NEAREST;
         if (arg1) {
-            if (strcasecmp(arg1, "axis") == 0) order = TRAVEL_AXIS;
-            else if (strcasecmp(arg1, "random") == 0) order = TRAVEL_RANDOM;
+            if (strcasecmp(arg1, "axis") == 0)
+                order = TRAVEL_AXIS;
+            else if (strcasecmp(arg1, "random") == 0)
+                order = TRAVEL_RANDOM;
         }
         Orchestrator::setTravelOrder(order);
         Orchestrator::setMode(ORCH_TRAVEL);
-    }
-    else if (strcasecmp(sub, "random") == 0) {
+    } else if (strcasecmp(sub, "random") == 0) {
         if (!MeshConductor::isGateway()) {
             Serial.println("Not gateway — random mode only runs on gateway");
             return;
         }
         Orchestrator::setMode(ORCH_RANDOM);
-    }
-    else if (strcasecmp(sub, "seq") == 0) {
+    } else if (strcasecmp(sub, "seq") == 0) {
         if (!arg1) {
             Serial.println("Usage: orch seq list|add|clear|save|load|play");
             return;
@@ -941,43 +976,36 @@ static void cmd_orch(const char* args) {
             const SeqStep* steps = Orchestrator::sequenceSteps();
             for (uint8_t i = 0; i < cnt; i++) {
                 const char* tn = ToneLibrary::nameByIndex(steps[i].tone_index);
-                Serial.printf("  [%u] node=%u tone=%u(%s) delay=%u ms\n",
-                    i, steps[i].node_index, steps[i].tone_index,
-                    tn ? tn : "?", steps[i].delay_ms);
+                Serial.printf(
+                  "  [%u] node=%u tone=%u(%s) delay=%u ms\n", i, steps[i].node_index, steps[i].tone_index, tn ? tn : "?", steps[i].delay_ms);
             }
-        }
-        else if (strcasecmp(arg1, "add") == 0) {
+        } else if (strcasecmp(arg1, "add") == 0) {
             // arg2=node, arg3=tone; need one more token for delay
             if (!arg2 || !arg3) {
                 Serial.println("Usage: orch seq add <node> <tone> <delay>");
                 return;
             }
-            char* arg4 = strtok(nullptr, " ");
-            uint8_t node = atoi(arg2);
-            uint8_t tone = atoi(arg3);
+            char* arg4     = strtok(nullptr, " ");
+            uint8_t node   = atoi(arg2);
+            uint8_t tone   = atoi(arg3);
             uint16_t delay = arg4 ? atoi(arg4) : 500;
             Orchestrator::addSequenceStep(node, tone, delay);
             Serial.printf("Added step: node=%u tone=%u delay=%u\n", node, tone, delay);
-        }
-        else if (strcasecmp(arg1, "clear") == 0) {
+        } else if (strcasecmp(arg1, "clear") == 0) {
             Orchestrator::clearSequence();
             Serial.println("Sequence cleared");
-        }
-        else if (strcasecmp(arg1, "save") == 0) {
+        } else if (strcasecmp(arg1, "save") == 0) {
             Orchestrator::saveSequence();
-        }
-        else if (strcasecmp(arg1, "load") == 0) {
+        } else if (strcasecmp(arg1, "load") == 0) {
             Orchestrator::loadSequence();
-        }
-        else if (strcasecmp(arg1, "play") == 0) {
+        } else if (strcasecmp(arg1, "play") == 0) {
             if (!MeshConductor::isGateway()) {
                 Serial.println("Not gateway");
                 return;
             }
             Orchestrator::setMode(ORCH_SEQUENCE);
         }
-    }
-    else if (strcasecmp(sub, "sched") == 0) {
+    } else if (strcasecmp(sub, "sched") == 0) {
         if (!arg1) {
             Serial.println("Usage: orch sched <ms> <mode> | orch sched cancel");
             return;
@@ -986,31 +1014,32 @@ static void cmd_orch(const char* args) {
             Orchestrator::cancelSchedule();
         } else {
             uint32_t delayMs = atoi(arg1);
-            OrchMode mode = ORCH_RANDOM;
+            OrchMode mode    = ORCH_RANDOM;
             if (arg2) {
-                if (strcasecmp(arg2, "travel") == 0)   mode = ORCH_TRAVEL;
-                else if (strcasecmp(arg2, "random") == 0)  mode = ORCH_RANDOM;
-                else if (strcasecmp(arg2, "seq") == 0)     mode = ORCH_SEQUENCE;
+                if (strcasecmp(arg2, "travel") == 0)
+                    mode = ORCH_TRAVEL;
+                else if (strcasecmp(arg2, "random") == 0)
+                    mode = ORCH_RANDOM;
+                else if (strcasecmp(arg2, "seq") == 0)
+                    mode = ORCH_SEQUENCE;
             }
             Orchestrator::scheduleRelative(delayMs, mode);
         }
-    }
-    else if (strcasecmp(sub, "stop") == 0) {
+    } else if (strcasecmp(sub, "stop") == 0) {
         Orchestrator::setMode(ORCH_OFF);
-    }
-    else if (strcasecmp(sub, "status") == 0) {
+    } else if (strcasecmp(sub, "status") == 0) {
         Orchestrator::printStatus(Serial);
-    }
-    else {
+    } else {
         Serial.println("Usage: orch travel|random|seq|sched|stop|status");
     }
 }
 
-static void cmd_temp(const char* args) {
+static void cmd_temp(const char* args)
+{
     (void)args;
     if (!s_tempSensor) {
         temperature_sensor_config_t cfg = TEMPERATURE_SENSOR_CONFIG_DEFAULT(-10, 80);
-        esp_err_t err = temperature_sensor_install(&cfg, &s_tempSensor);
+        esp_err_t err                   = temperature_sensor_install(&cfg, &s_tempSensor);
         if (err != ESP_OK) {
             Serial.printf("Temp sensor install failed: %s\n", esp_err_to_name(err));
             return;
@@ -1026,7 +1055,8 @@ static void cmd_temp(const char* args) {
     }
 }
 
-static void cmd_reboot(const char* args) {
+static void cmd_reboot(const char* args)
+{
     (void)args;
     Serial.println("Rebooting...");
     Serial.flush();
@@ -1036,28 +1066,33 @@ static void cmd_reboot(const char* args) {
 // --- CLI History ---
 
 static constexpr uint8_t HIST_MAX = 3;
-static char   s_history[HIST_MAX][128];
-static uint8_t s_histCount  = 0;   // total entries stored (0..HIST_MAX)
-static uint8_t s_histWrite  = 0;   // next write slot (circular)
+static char s_history[HIST_MAX][128];
+static uint8_t s_histCount = 0; // total entries stored (0..HIST_MAX)
+static uint8_t s_histWrite = 0; // next write slot (circular)
 
-static void histPush(const char* line) {
+static void histPush(const char* line)
+{
     // Skip if duplicate of most recent entry
     if (s_histCount > 0) {
         uint8_t last = (s_histWrite + HIST_MAX - 1) % HIST_MAX;
-        if (strcmp(s_history[last], line) == 0) return;
+        if (strcmp(s_history[last], line) == 0)
+            return;
     }
     strncpy(s_history[s_histWrite], line, 127);
     s_history[s_histWrite][127] = '\0';
-    s_histWrite = (s_histWrite + 1) % HIST_MAX;
-    if (s_histCount < HIST_MAX) s_histCount++;
+    s_histWrite                 = (s_histWrite + 1) % HIST_MAX;
+    if (s_histCount < HIST_MAX)
+        s_histCount++;
 }
 
 // Erase current line on terminal, replace with new content
-static void lineReplace(char* lineBuf, uint8_t& linePos, const char* newLine) {
+static void lineReplace(char* lineBuf, uint8_t& linePos, const char* newLine)
+{
     // Move cursor to start, overwrite with spaces, move back
     Serial.print('\r');
     Serial.print("> ");
-    for (uint8_t i = 0; i < linePos; i++) Serial.print(' ');
+    for (uint8_t i = 0; i < linePos; i++)
+        Serial.print(' ');
     // Write new content
     linePos = (uint8_t)strlen(newLine);
     memcpy(lineBuf, newLine, linePos);
@@ -1069,7 +1104,8 @@ static void lineReplace(char* lineBuf, uint8_t& linePos, const char* newLine) {
 
 // --- CLI Task ---
 
-static void debugCliTask(void* pvParameters) {
+static void debugCliTask(void* pvParameters)
+{
     (void)pvParameters;
     char lineBuf[128];
     uint8_t linePos = 0;
@@ -1090,7 +1126,8 @@ static void debugCliTask(void* pvParameters) {
 
         // Tab on empty line: cycle through history
         if (c == '\t') {
-            if (s_histCount == 0) continue;
+            if (s_histCount == 0)
+                continue;
             browseIdx++;
             if (browseIdx >= (int8_t)s_histCount) {
                 // Wrapped past oldest — clear line
@@ -1122,12 +1159,12 @@ static void debugCliTask(void* pvParameters) {
             memcpy(savedLine, lineBuf, linePos + 1);
 
             // Parse command and args
-            char* cmd = lineBuf;
+            char* cmd  = lineBuf;
             char* args = nullptr;
             for (uint8_t i = 0; i < linePos; i++) {
                 if (lineBuf[i] == ' ') {
                     lineBuf[i] = '\0';
-                    args = &lineBuf[i + 1];
+                    args       = &lineBuf[i + 1];
                     break;
                 }
             }
@@ -1163,7 +1200,8 @@ static void debugCliTask(void* pvParameters) {
 
 // --- Public API ---
 
-void debug_cli_init() {
+void debug_cli_init()
+{
     SqLogClass::init();
     xTaskCreate(debugCliTask, "cli", 4096, nullptr, tskIDLE_PRIORITY + 1, nullptr);
 }

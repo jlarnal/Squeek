@@ -2,6 +2,9 @@
   "_platformio_help": "Path to the PlatformIO CLI executable. Supports env vars (%USERPROFILE%, $HOME) and ~/",
   "platformio": "%USERPROFILE%/.platformio/penv/Scripts/platformio.exe",
 
+  "_esptool_help": "Path to the esptool executable (used for sequential mode -s). Supports env vars.",
+  "esptool": "C:/Espressif/tools/python/v5.5.2/venv/Scripts/esptool.exe",
+
   "_baud_help": "Upload baud rate (default 460800 if omitted)",
   "baud": 460800
 }

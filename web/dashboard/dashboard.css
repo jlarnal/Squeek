@@ -91,8 +91,8 @@ justify-content:center}
 justify-content:center;background:rgba(13,13,26,.85);z-index:5;border-radius:var(--rad);
 transition:opacity .4s}
 #scanOverlay.hidden{opacity:0;pointer-events:none}
-#scanOverlay svg{width:50%;max-width:180px}
-#scanOverlay .scan-label{color:var(--text2);margin-top:12px;font-size:.85em}
+#scanOverlay svg{width:50%;max-width:180px;pointer-events:none}
+#scanOverlay .scan-label{color:var(--text2);margin-top:12px;font-size:.85em;pointer-events:none}
 @keyframes scan-spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
 #scanSector{transform-origin:42.33px 42.33px;animation:scan-spin 3s linear infinite}
 

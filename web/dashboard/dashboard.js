@@ -317,6 +317,7 @@ renderMap();
 mvp.addEventListener("touchend",function(){mapDragging=false;mapPinching=false;},{passive:true});
 
 mvp.addEventListener("wheel",function(e){
+if(!hasPositions())return;  /* let page scroll when map is empty */
 e.preventDefault();
 mapZoom=Math.max(0.3,Math.min(4,mapZoom*(1-e.deltaY*0.001)));
 renderMap();

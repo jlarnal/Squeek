@@ -39,6 +39,9 @@ enum MeshMsgType : uint8_t {
     MSG_TYPE_CRED_VERIFIED  = 0xA1,  // scan delegate → gateway: SSID found
     MSG_TYPE_CRED_REJECTED  = 0xA2,  // scan delegate → gateway: SSID not found
     MSG_TYPE_REBOOT_WARN    = 0xA3,  // gateway → all: I'm rebooting, you should too
+    // Force gateway (manual gateway designation)
+    MSG_TYPE_FORCE_GATEWAY     = 0xB0,  // peer → gateway: request to become gateway
+    MSG_TYPE_FORCE_GATEWAY_GO  = 0xB1,  // gateway → peer: confirmed, proceed
 };
 
 // --- Heartbeat message (peer → gateway) ---
@@ -214,6 +217,16 @@ struct __attribute__((packed)) CredRejectedMsg {
 struct __attribute__((packed)) RebootWarnMsg {
     uint8_t type;           // MSG_TYPE_REBOOT_WARN
     uint16_t delay_ms;      // how long peers should wait before rebooting
+};
+
+// --- Force gateway messages (manual gateway designation) ---
+
+struct __attribute__((packed)) ForceGatewayMsg {
+    uint8_t type;           // MSG_TYPE_FORCE_GATEWAY
+};
+
+struct __attribute__((packed)) ForceGatewayGoMsg {
+    uint8_t type;           // MSG_TYPE_FORCE_GATEWAY_GO
 };
 
 // --- Tenure score computation (RAM-only, never persisted) ---

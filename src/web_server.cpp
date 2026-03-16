@@ -450,11 +450,14 @@ void SqWebServer::registerRoutes() {
 
     // ----- POST /api/sweep -----
     s_server->on("/api/sweep", HTTP_POST, [](AsyncWebServerRequest* request) {
+        Serial.println("[web] POST /api/sweep");
         if (!MeshConductor::isGateway()) {
+            Serial.println("[web] sweep rejected: not gateway");
             request->send(403, "application/json", "{\"error\":\"gateway only\"}");
             return;
         }
         FtmScheduler::enqueueFullSweep();
+        Serial.println("[web] sweep: enqueued full sweep");
         request->send(200, "application/json", "{\"ok\":true}");
     });
 
@@ -468,7 +471,9 @@ void SqWebServer::registerRoutes() {
 
     // Catch-all: try to serve from LittleFS, else 404
     s_server->onNotFound([](AsyncWebServerRequest* request) {
+        Serial.printf("[web] %s %s\n", request->methodToString(), request->url().c_str());
         if (!StorageManager::serveFile(request, request->url().c_str())) {
+            Serial.printf("[web] 404: %s\n", request->url().c_str());
             request->send(404, "text/plain", "404 — Not Found");
         }
     });

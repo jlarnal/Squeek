@@ -2,8 +2,10 @@
 """Build once, flash many — parallel ESP32 upload tool.
 
 All flash offsets and file paths are derived automatically from platformio.ini
-and PlatformIO build outputs — zero hardcoded constants.  Flashing and erasing
-use EspTool_Multi.exe (C# interleaved round-robin, no esptool dependency).
+and PlatformIO build outputs — zero hardcoded constants.
+
+Parallel mode (default): uses EspTool_Multi.exe (C# interleaved round-robin).
+Sequential mode (-s):    uses esptool.py, one port at a time.
 
 Usage:
     upload_all.py -b <targets> -f <targets> -e <targets> -p <ports> [-v ENV]
@@ -22,6 +24,7 @@ Examples:
     upload_all.py -f fs -p COM8
     upload_all.py -b fs
     upload_all.py -b app -f boot app -e nvs -p COM8 COM10@115200 COM12
+    upload_all.py -s -b app -f app -p COM8 COM9    # sequential via esptool
 """
 
 import argparse
@@ -373,15 +376,11 @@ def build_filesystem(cfg, env_arg):
 
 
 # ---------------------------------------------------------------------------
-# EspTool_Multi interface
+# Flashing backends
 # ---------------------------------------------------------------------------
 
 def _stream_output(pipe):
-    """Stream subprocess output, preserving \\r progress updates.
-
-    EspTool_Multi formats its own per-port prefixes ([COM8] FLASH 45% ...),
-    so we pass lines through without adding our own prefix.
-    """
+    """Stream subprocess output, preserving \\r progress updates."""
     buf = b""
     while True:
         chunk = pipe.read1(256)
@@ -408,20 +407,12 @@ def _stream_output(pipe):
         print(f"  {text}", flush=True)
 
 
-def _run_multi(ports, baud, args_list, timeout=300):
-    """Run EspTool_Multi with the given arguments.
+def _run_subprocess(cmd, timeout=300):
+    """Run a flash tool subprocess with streamed output and timeout.
 
-    Returns (passed, failed) counts.
-    Stdout is streamed in a daemon thread so the main thread can enforce
-    the timeout even if the process stalls without closing its pipe.
+    Returns exit code.
     """
-    if not ESPTOOL_MULTI.exists():
-        sys.exit(f"ERROR: EspTool_Multi.exe not found at {ESPTOOL_MULTI}")
-
-    cmd = [str(ESPTOOL_MULTI), "-p", ",".join(ports), "-b", str(baud)] + args_list
-
     print(f"   CMD: {' '.join(cmd)}")
-
     try:
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
@@ -440,25 +431,16 @@ def _run_multi(ports, baud, args_list, timeout=300):
             proc.stdout.close()
             reader.join(timeout=5)
             proc.wait()
-            print(f"  [FAILED] EspTool_Multi timed out after {timeout}s")
-            return 0, len(ports)
+            print(f"  [FAILED] Timed out after {timeout}s")
+            return -1
 
-        rc = proc.wait(timeout=10)
-
-        if rc == 0:
-            return len(ports), 0
-        elif rc == 2:
-            print("  [FAILED] Chip type mismatch across ports")
-            return 0, len(ports)
-        else:
-            print(f"  [PARTIAL] EspTool_Multi exited with code {rc}")
-            return 0, len(ports)
+        return proc.wait(timeout=10)
     except subprocess.TimeoutExpired:
         proc.kill()
         proc.stdout.close()
         proc.wait()
-        print(f"  [FAILED] EspTool_Multi timed out after {timeout}s")
-        return 0, len(ports)
+        print(f"  [FAILED] Timed out after {timeout}s")
+        return -1
     except Exception as e:
         try:
             proc.kill()
@@ -466,34 +448,105 @@ def _run_multi(ports, baud, args_list, timeout=300):
             proc.wait()
         except Exception:
             pass
-        print(f"  [FAILED] EspTool_Multi error: {e}")
+        print(f"  [FAILED] Error: {e}")
+        return -1
+
+
+# ---------------------------------------------------------------------------
+# esptool.py — sequential, one port at a time
+# ---------------------------------------------------------------------------
+
+def _resolve_esptool(cfg):
+    """Resolve the esptool executable path from config."""
+    p = cfg.get("esptool")
+    if not p:
+        sys.exit("ERROR: 'esptool' not set in upload_all.config.json")
+    resolved = str(Path(os.path.expandvars(p)).expanduser())
+    if not Path(resolved).exists():
+        sys.exit(f"ERROR: esptool not found at {resolved}")
+    return resolved
+
+
+def _run_esptool(port, baud, args_list, cfg, timeout=300):
+    """Run esptool for a single port.
+
+    Returns (passed, failed) — (1, 0) on success, (0, 1) on failure.
+    """
+    esptool = _resolve_esptool(cfg)
+    cmd = [esptool, "--port", port, "--baud", str(baud)] + args_list
+
+    print(f"\n  [{port}]")
+    rc = _run_subprocess(cmd, timeout)
+    if rc == 0:
+        print(f"  [{port}] OK")
+        return 1, 0
+    else:
+        print(f"  [{port}] FAILED (exit {rc})")
+        return 0, 1
+
+
+# ---------------------------------------------------------------------------
+# EspTool_Multi.exe — parallel, all ports at once
+# ---------------------------------------------------------------------------
+
+def _run_multi(ports, baud, args_list, timeout=300):
+    """Run EspTool_Multi with the given arguments.
+
+    Returns (passed, failed) counts.
+    """
+    if not ESPTOOL_MULTI.exists():
+        sys.exit(f"ERROR: EspTool_Multi.exe not found at {ESPTOOL_MULTI}")
+
+    cmd = [str(ESPTOOL_MULTI), "-p", ",".join(ports), "-b", str(baud)] + args_list
+
+    rc = _run_subprocess(cmd, timeout)
+    if rc == 0:
+        return len(ports), 0
+    elif rc == 2:
+        print("  [FAILED] Chip type mismatch across ports")
+        return 0, len(ports)
+    else:
+        print(f"  [PARTIAL] EspTool_Multi exited with code {rc}")
         return 0, len(ports)
 
 
-def run_erase_flash(baud_groups):
+def _dispatch(ports, baud, args_list, sequential=False, cfg=None):
+    """Route to esptool (sequential) or EspTool_Multi (parallel)."""
+    if sequential:
+        total_p, total_f = 0, 0
+        for port in ports:
+            p, f = _run_esptool(port, baud, args_list, cfg)
+            total_p += p
+            total_f += f
+        return total_p, total_f
+    else:
+        return _run_multi(ports, baud, args_list)
+
+
+def run_erase_flash(baud_groups, sequential=False, cfg=None):
     """Full chip erase across all port groups."""
     print(f"\n>> ERASE FLASH (full chip)")
     total_p, total_f = 0, 0
     for baud, ports in baud_groups.items():
-        p, f = _run_multi(ports, baud, ["erase_flash"])
+        p, f = _dispatch(ports, baud, ["erase_flash"], sequential, cfg)
         total_p += p
         total_f += f
     return total_p, total_f
 
 
-def run_erase_region(baud_groups, offset, size, label=""):
+def run_erase_region(baud_groups, offset, size, label="", sequential=False, cfg=None):
     """Erase a specific flash region across all port groups."""
     desc = f" ({label})" if label else ""
     print(f"\n>> ERASE REGION{desc}: offset={hex(offset)}, size={hex(size)}")
     total_p, total_f = 0, 0
     for baud, ports in baud_groups.items():
-        p, f = _run_multi(ports, baud, ["erase_region", hex(offset), hex(size)])
+        p, f = _dispatch(ports, baud, ["erase_region", hex(offset), hex(size)], sequential, cfg)
         total_p += p
         total_f += f
     return total_p, total_f
 
 
-def run_write_flash(baud_groups, flash_pairs):
+def run_write_flash(baud_groups, flash_pairs, sequential=False, cfg=None):
     """Write flash segments across all port groups."""
     print(f"\n>> WRITE FLASH ({len(flash_pairs)} segment(s))")
     for offset, filepath in flash_pairs:
@@ -505,7 +558,7 @@ def run_write_flash(baud_groups, flash_pairs):
 
     total_p, total_f = 0, 0
     for baud, ports in baud_groups.items():
-        p, f = _run_multi(ports, baud, args)
+        p, f = _dispatch(ports, baud, args, sequential, cfg)
         total_p += p
         total_f += f
     return total_p, total_f
@@ -564,6 +617,10 @@ def main():
     parser.add_argument(
         "-p", "--ports", nargs="+", metavar="PORT",
         help="Target ports (e.g. COM8 COM10@115200)"
+    )
+    parser.add_argument(
+        "-s", "--sequential", action="store_true",
+        help="Flash ports one at a time instead of in parallel"
     )
     parser.add_argument(
         "-v", "--environment", dest="env", default=None, metavar="ENV",
@@ -628,7 +685,7 @@ def main():
 
     # ── Phase 2: Erase ──
     if erase_all:
-        p, f = run_erase_flash(baud_groups)
+        p, f = run_erase_flash(baud_groups, sequential=args.sequential, cfg=cfg)
         total_passed += p
         total_failed += f
         if f:
@@ -638,7 +695,7 @@ def main():
             if target not in layout or not layout[target].get('erase'):
                 sys.exit(f"ERROR: No partition info for erase target '{target}'")
             offset, size = layout[target]['erase']
-            p, f = run_erase_region(baud_groups, offset, size, label=target)
+            p, f = run_erase_region(baud_groups, offset, size, label=target, sequential=args.sequential, cfg=cfg)
             total_passed += p
             total_failed += f
             if f:
@@ -652,7 +709,7 @@ def main():
             if target in flash_targets:
                 flash_pairs.extend(layout[target]['files'])
 
-        p, f = run_write_flash(baud_groups, flash_pairs)
+        p, f = run_write_flash(baud_groups, flash_pairs, sequential=args.sequential, cfg=cfg)
         total_passed += p
         total_failed += f
 

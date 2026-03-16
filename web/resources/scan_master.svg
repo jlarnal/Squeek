@@ -11,6 +11,7 @@
    sodipodi:docname="scan_master.svg"
    xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
    xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns:xlink="http://www.w3.org/1999/xlink"
    xmlns="http://www.w3.org/2000/svg"
    xmlns:svg="http://www.w3.org/2000/svg">
   <sodipodi:namedview
@@ -50,35 +51,27 @@
   </sodipodi:namedview>
   <defs
      id="defs1">
-    <meshgradient
+    <linearGradient
+       id="linearGradient1"
+       inkscape:collect="always">
+      <stop
+         style="stop-color:#ffffff;stop-opacity:1;"
+         offset="0"
+         id="stop1" />
+      <stop
+         style="stop-color:#ffffff;stop-opacity:0;"
+         offset="1"
+         id="stop2" />
+    </linearGradient>
+    <linearGradient
        inkscape:collect="always"
-       id="meshgradient12"
-       gradientUnits="userSpaceOnUse"
-       x="32.284409"
-       y="3.2969444">
-      <meshrow
-         id="meshrow1094">
-        <meshpatch
-           id="meshpatch1094">
-          <stop
-             path="c 30.8327,-3.29694  15.764,-3.29694  37.9464,7.9482"
-             style="stop-color:#ffffff;stop-opacity:0"
-             id="stop1094" />
-          <stop
-             path="c -16.6495,22.735  -6.63604,10.8137  -23.9371,31.0882"
-             style="stop-color:#ffffff;stop-opacity:1"
-             id="stop1095" />
-          <stop
-             path="c -7.92075,-1.2318e-05  -9.72228,2.5952  -21.1993,2.59521"
-             style="stop-color:#ffffff;stop-opacity:1"
-             id="stop1096" />
-          <stop
-             path="c -6.9249e-05,-12.8137  7.18958,-28.8179  7.19,-41.6316"
-             style="stop-color:#ffffff;stop-opacity:0"
-             id="stop1097" />
-        </meshpatch>
-      </meshrow>
-    </meshgradient>
+       xlink:href="#linearGradient1"
+       id="linearGradient2"
+       x1="61.739094"
+       y1="21.596378"
+       x2="37.606518"
+       y2="23.70332"
+       gradientUnits="userSpaceOnUse" />
   </defs>
   <g
      inkscape:label="Calque 1"
@@ -126,7 +119,7 @@
        inkscape:label="L1" />
     <path
        id="path11"
-       style="fill:url(#meshgradient12);stroke:none;stroke-width:1.19062;stroke-linecap:round;stroke-linejoin:round;paint-order:markers stroke fill"
+       style="fill:url(#linearGradient2);stroke:none;stroke-width:1.19062;stroke-linecap:round;stroke-linejoin:round;paint-order:markers stroke fill;fill-opacity:1"
        d="M 32.879705,5.0733045 C 38.930661,3.5380538 45.165966,3.5199896 51.074831,4.8998321 56.983696,6.2796746 62.566121,9.0574239 67.311316,13.1138 L 42.333334,42.333333 Z"
        sodipodi:nodetypes="csccc"
        inkscape:label="sector" />
