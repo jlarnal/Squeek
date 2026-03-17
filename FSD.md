@@ -277,7 +277,7 @@ LOW_BATTERY → DEEP_SLEEP (timer-only wake for periodic check)
 - LittleFS sample storage (upload via serial, future)
 - **Deliverable:** Node plays a chirp on command via `tone` CLI command.
 
-### Phase 4 — Orchestrator & Play Modes  ✅ IMPLEMENTED
+### Phase 4 — Orchestrator & Play Modes  🈯 SUSPENDED
 **Goal:** Coordinated sound across the flotilla.
 
 - [x] ClockSync — gateway broadcasts `millis()` offset at NVS-tunable interval; peers track offset for mesh-wide time
@@ -325,7 +325,7 @@ LOW_BATTERY → DEEP_SLEEP (timer-only wake for periodic check)
 **Phase 5C — Dashboard (in progress):**
 - [x] REST API: node list (`/api/peers`), position map (`/api/distances`), sound library (`/api/tones`), trigger play (`/api/orch`), config (`/api/config`), FTM sweep (`/api/sweep`), reboot (`/api/reboot`)
 - [x] Visual 3D topology map showing node positions (canvas + perspective projection + touch controls)
-- [x] Sequence designer: visual step builder with play/save/load/clear
+- [ ] Sequence designer: visual step builder with play/save/load/clear with enabling/disabling/sequencing through the 3D map
 - [x] Battery levels per node
 - [x] WebSocket real-time updates (peer join/leave, orch state)
 - [x] i18n (EN/FR/ES/DE)

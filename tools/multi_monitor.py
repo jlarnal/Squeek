@@ -13,6 +13,10 @@ Per-port baud:  python multi_monitor.py COM1@57600 COM2@9600
 In multi-port mode, press F2 in any window to toggle COMMON INPUT MODE.
 When active, lines you type are sent to ALL ports simultaneously.
 
+Press F3 to toggle RAW INPUT MODE: each keystroke is sent immediately
+to the serial port without waiting for Enter (for interactive firmware
+modes like the tone player).
+
 Autoscroll: output pauses when you scroll up, resumes when you scroll
 back to the bottom (Windows only).
 """
@@ -35,6 +39,7 @@ import serial
 
 DEFAULT_BAUD = 115200
 F2_SCANCODE = 0x3C
+F3_SCANCODE = 0x3D
 MAX_PENDING = 512 * 1024  # max buffered bytes while scrolled up
 DEFAULT_RECONNECT_INTERVAL = 2.0  # seconds between reconnect attempts
 
@@ -455,6 +460,7 @@ def single_port_monitor(
     no_timestamp: bool = False,
 ) -> None:
     common_mode = False
+    raw_mode = False
     relay_sock: socket.socket | None = None
     ser: serial.Serial | None = None
     disconnected = threading.Event()
@@ -464,6 +470,8 @@ def single_port_monitor(
         if sys.platform == "win32":
             if disconnected.is_set():
                 suffix = " [DISCONNECTED]"
+            elif raw_mode:
+                suffix = " [RAW]"
             elif common_mode:
                 suffix = " [COMMON]"
             else:
@@ -567,6 +575,7 @@ def single_port_monitor(
     print(f"--- {port_name} @ {baud} baud ---")
     if relay_sock:
         print("--- F2: toggle COMMON INPUT mode ---")
+    print("--- F3: toggle RAW INPUT mode (for interactive CLI) ---")
     print("--- Ctrl+C to quit ---\n")
 
     # -- Serial reader thread (with smart autoscroll + reconnect) ------------
@@ -664,6 +673,13 @@ def single_port_monitor(
         state = "ON" if common_mode else "OFF"
         print(f"\r--- COMMON INPUT MODE {state} (F2 to toggle) ---")
 
+    def toggle_raw() -> None:
+        nonlocal raw_mode
+        raw_mode = not raw_mode
+        update_title()
+        state = "ON" if raw_mode else "OFF"
+        print(f"\r--- RAW INPUT MODE {state} (F3 to toggle) ---")
+
     def send_line(line: str) -> None:
         if logger:
             logger.log_tx(line)
@@ -677,6 +693,14 @@ def single_port_monitor(
             try:
                 relay_sock.sendall((line + "\n").encode())
             except Exception:
+                pass
+
+    def send_raw(ch: bytes) -> None:
+        if not disconnected.is_set():
+            try:
+                ser.write(ch)
+                ser.flush()
+            except (serial.SerialException, OSError):
                 pass
 
     try:
@@ -697,9 +721,19 @@ def single_port_monitor(
                     scan = msvcrt.getch()[0]
                     if scan == F2_SCANCODE and relay_sock:
                         toggle_common()
+                    elif scan == F3_SCANCODE:
+                        toggle_raw()
                     continue
 
                 code = b[0]
+
+                if code == 3:  # Ctrl+C
+                    raise KeyboardInterrupt
+
+                if raw_mode:
+                    # Send every keystroke immediately, no local echo
+                    send_raw(b)
+                    continue
 
                 if code == 13:  # Enter
                     sys.stdout.buffer.write(b"\r\n")
@@ -711,8 +745,6 @@ def single_port_monitor(
                         line_buf = line_buf[:-1]
                         sys.stdout.buffer.write(b"\b \b")
                         sys.stdout.buffer.flush()
-                elif code == 3:  # Ctrl+C
-                    raise KeyboardInterrupt
                 elif 32 <= code < 127:
                     line_buf += chr(code)
                     sys.stdout.buffer.write(b)

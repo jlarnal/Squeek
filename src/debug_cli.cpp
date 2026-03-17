@@ -81,7 +81,7 @@ static const CliCommand s_commands[] = {
     { "status", cmd_status, "Print mesh state, role, battery, peers" },
     { "sweep", cmd_sweep, "FTM full sweep, print distance matrix" },
     { "temp", cmd_temp, "Read internal temperature sensor" },
-    { "tone", cmd_tone, "Interactive tone player (numpad)" },
+    { "tone", cmd_tone, "Tone player: 'tone list' or interactive" },
     { "wifi", cmd_wifi, "WiFi: scan|set|clear|status|creds|delegate" },
 };
 static constexpr int CMD_COUNT = sizeof(s_commands) / sizeof(s_commands[0]);
@@ -364,63 +364,36 @@ static void cmd_peers(const char* args)
     }
 }
 
-// Numpad key-to-tone mapping (index 0-9, nullptr = unassigned)
-static const struct {
-    const char* name;
-    const char* label;
-} s_padSlots[10] = {
-    { nullptr, "stop" }, // 0
-    { "chirp", "chirp" }, // 1
-    { "chirp_down", "chirp down" }, // 2
-    { "squeak", "squeak" }, // 3
-    { "warble", "warble" }, // 4
-    { "alert", "alert" }, // 5
-    { "fade_chirp", "fade chirp" }, // 6
-    { nullptr, "---" }, // 7
-    { nullptr, "---" }, // 8
-    { nullptr, "---" }, // 9
-};
-
-static void tonePadDraw(const char* status)
+// Auto-assign mnemonic keys: 1-9 then a-z
+static char toneKey(uint8_t idx)
 {
-    Serial.println("Tone Player (press key, '.' to quit)");
-    Serial.println("\xe2\x94\x8c\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xac\xe2\x94\x80\xe2\x94"
-                   "\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xac\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2"
-                   "\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x90"); // ┌───────┬───────┬───────┐
-    // Row: 7 8 9
-    Serial.printf("\xe2\x94\x82 7     \xe2\x94\x82 8     \xe2\x94\x82 9     \xe2\x94\x82\n");
-    Serial.printf(
-      "\xe2\x94\x82 %-5s \xe2\x94\x82 %-5s \xe2\x94\x82 %-5s \xe2\x94\x82\n", s_padSlots[7].label, s_padSlots[8].label, s_padSlots[9].label);
-    Serial.println("\xe2\x94\x9c\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xbc\xe2\x94\x80\xe2\x94"
-                   "\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xbc\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2"
-                   "\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xa4"); // ├───────┼───────┼───────┤
-    // Row: 4 5 6
-    Serial.printf("\xe2\x94\x82 4     \xe2\x94\x82 5     \xe2\x94\x82 6     \xe2\x94\x82\n");
-    Serial.printf(
-      "\xe2\x94\x82 %-5s \xe2\x94\x82 %-5s \xe2\x94\x82 %-5s \xe2\x94\x82\n", s_padSlots[4].label, s_padSlots[5].label, s_padSlots[6].label);
-    Serial.println("\xe2\x94\x9c\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xbc\xe2\x94\x80\xe2\x94"
-                   "\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xbc\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2"
-                   "\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xa4"); // ├───────┼───────┼───────┤
-    // Row: 1 2 3
-    Serial.printf("\xe2\x94\x82 1     \xe2\x94\x82 2     \xe2\x94\x82 3     \xe2\x94\x82\n");
-    Serial.printf(
-      "\xe2\x94\x82 %-5s \xe2\x94\x82 %-5s \xe2\x94\x82 %-5s \xe2\x94\x82\n", s_padSlots[1].label, s_padSlots[2].label, s_padSlots[3].label);
-    Serial.println("\xe2\x94\x9c\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xb4\xe2\x94\x80\xe2\x94"
-                   "\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xbc\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2"
-                   "\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xa4"); // ├───────┴───────┼───────┤
-    Serial.println("\xe2\x94\x82     0 = stop  \xe2\x94\x82 . quit\xe2\x94\x82");
-    Serial.println("\xe2\x94\x94\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94"
-                   "\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xb4\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2"
-                   "\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x98"); // └───────────────┴───────┘
-    if (status && *status) {
-        Serial.printf("[%s]\n", status);
+    if (idx < 9) return '1' + idx;
+    if (idx < 9 + 26) return 'a' + (idx - 9);
+    return '?';
+}
+
+static void toneList()
+{
+    uint8_t n = ToneLibrary::count();
+    Serial.println("Tones:");
+    for (uint8_t i = 0; i < n; i++) {
+        Serial.printf("  %c;%-14s", toneKey(i), ToneLibrary::nameByIndex(i));
+        if ((i % 4) == 3 || i == n - 1)
+            Serial.println();
     }
 }
 
 static void cmd_tone(const char* args)
 {
-    (void)args;
-    tonePadDraw(nullptr);
+    if (args && strncmp(args, "list", 4) == 0) {
+        toneList();
+        return;
+    }
+
+    toneList();
+    Serial.println("Press key to play, 0=stop, .=quit");
+
+    uint8_t n = ToneLibrary::count();
 
     for (;;) {
         if (!Serial.available()) {
@@ -430,23 +403,24 @@ static void cmd_tone(const char* args)
         char c = Serial.read();
 
         if (c == '.' || c == 127) {
-            // Exit tone mode
             AudioEngine::stop();
             Serial.println("Tone player closed.");
             return;
         }
 
-        if (c >= '0' && c <= '9') {
-            int idx = c - '0';
-            if (idx == 0) {
-                AudioEngine::stop();
-            } else if (s_padSlots[idx].name) {
-                const ToneSequence* seq = ToneLibrary::get(s_padSlots[idx].name);
-                if (seq)
-                    AudioEngine::play(seq);
+        if (c == '0') {
+            AudioEngine::stop();
+            continue;
+        }
+
+        // Match key to group index
+        for (uint8_t i = 0; i < n; i++) {
+            if (toneKey(i) == c) {
+                const ToneSequence* seq = ToneLibrary::getByIndex(i);
+                if (seq) AudioEngine::play(seq);
+                break;
             }
         }
-        // Ignore other keys silently
     }
 }
 
@@ -921,7 +895,7 @@ static void cmd_status(const char* args)
     }
     Serial.printf("Mesh connected: %s\n", MeshConductor::isConnected() ? "yes" : "no");
     IMeshRole* r     = MeshConductor::role();
-    const char* role = (r && r->roleId() == RoleId::DELEGATE) ? "DELEGATE" : MeshConductor::isGateway() ? "GATEWAY" : "NODE";
+    const char* role = (r && r->roleId() == RoleId::DELEGATE) ? "DELEGATE" : MeshConductor::isGateway() ? "GATEWAY" : "PEER";
     Serial.printf("Role: %s\n", role);
     if (MeshConductor::isConnected()) {
         MeshConductor::printStatus();
